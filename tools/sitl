@@ -1,0 +1,394 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+source "${ROOT}/config/common.env"
+source "${ROOT}/config/sitl.env"
+
+ROS_SETUP="/opt/ros/${ROS_DISTRO}/setup.bash"
+WS_SETUP="${ROOT}/ros2/install/setup.bash"
+TMUX_CONFIG="${ROOT}/config/tmux.conf"
+ACTION="${1:-start}"
+
+usage() {
+    echo "Usage: ./tools/sitl [start|stop|status]"
+}
+
+require_config_value() {
+    local name="$1"
+
+    if [[ -z "${!name-}" ]]; then
+        echo "ERROR: missing ${name} in config/sitl.env."
+        exit 1
+    fi
+}
+
+require_boolean() {
+    local name="$1"
+    local value="${!name-}"
+
+    case "${value}" in
+        true|false) ;;
+        *)
+            echo "ERROR: ${name} must be either 'true' or 'false'."
+            exit 1
+            ;;
+    esac
+}
+
+if (( $# > 1 )); then
+    usage
+    exit 2
+fi
+
+case "${ACTION}" in
+    start|stop|status) ;;
+    *)
+        usage
+        exit 2
+        ;;
+esac
+
+require_config_value TMUX_SESSION
+require_boolean START_XRCE_AGENT
+require_boolean START_QGC
+
+if ! command -v tmux >/dev/null 2>&1; then
+    echo "ERROR: tmux is not installed."
+    exit 1
+fi
+
+session_exists() {
+    tmux has-session -t "${TMUX_SESSION}" 2>/dev/null
+}
+
+launch_command() {
+    local launch_file="$1"
+    local command
+
+    printf -v command \
+        'source %q && source %q && exec ros2 launch px4_bringup %q' \
+        "${ROS_SETUP}" "${WS_SETUP}" "${launch_file}"
+
+    printf 'bash -lc %q' "${command}"
+}
+
+start_stack() {
+    if [[ ! -f "${ROS_SETUP}" ]]; then
+        echo "ERROR: ROS 2 ${ROS_DISTRO} is not installed."
+        exit 1
+    fi
+
+    if [[ ! -f "${WS_SETUP}" ]]; then
+        echo "ERROR: ROS 2 workspace has not been built."
+        exit 1
+    fi
+
+    if [[ ! -f "${TMUX_CONFIG}" ]]; then
+        echo "ERROR: missing tmux config:"
+        echo "  ${TMUX_CONFIG}"
+        exit 1
+    fi
+
+    if session_exists; then
+        exec tmux attach-session -t "${TMUX_SESSION}"
+    fi
+
+    local px4_command
+    px4_command="$(launch_command px4_sitl.launch.py)"
+
+    if [[ "${START_XRCE_AGENT}" == "true" ]]; then
+        local xrce_command
+        xrce_command="$(launch_command xrce.launch.py)"
+
+        tmux new-session \
+            -d \
+            -s "${TMUX_SESSION}" \
+            -n xrce-dds \
+            "${xrce_command}"
+
+        tmux new-window \
+            -t "${TMUX_SESSION}:" \
+            -n px4-sitl \
+            "${px4_command}"
+    else
+        tmux new-session \
+            -d \
+            -s "${TMUX_SESSION}" \
+            -n px4-sitl \
+            "${px4_command}"
+    fi
+
+    if [[ "${START_QGC}" == "true" ]]; then
+        local qgc_command
+        qgc_command="$(launch_command qgc.launch.py)"
+
+        tmux new-window \
+            -t "${TMUX_SESSION}:" \
+            -n qgroundcontrol \
+            "${qgc_command}"
+    fi
+
+    tmux source-file "${TMUX_CONFIG}"
+    tmux select-window -t "${TMUX_SESSION}:px4-sitl"
+
+    echo "tmux session: ${TMUX_SESSION}"
+    echo
+    tmux list-windows \
+        -t "${TMUX_SESSION}" \
+        -F '  #I: #W'
+
+    exec tmux attach-session -t "${TMUX_SESSION}"
+}
+
+pid_is_alive() {
+    local pid="$1"
+    local state
+
+    [[ -r "/proc/${pid}/stat" ]] || return 1
+
+    state="$(
+        awk '{print $3}' "/proc/${pid}/stat" 2>/dev/null || true
+    )"
+
+    [[ -n "${state}" && "${state}" != "Z" ]]
+}
+
+collect_process_tree() {
+    local root_pid="$1"
+    local -a queue=("${root_pid}")
+    local index=0
+    local pid
+    local child
+
+    while (( index < ${#queue[@]} )); do
+        pid="${queue[$index]}"
+        index=$((index + 1))
+
+        echo "${pid}"
+
+        while IFS= read -r child; do
+            if [[ -n "${child}" ]]; then
+                queue+=("${child}")
+            fi
+        done < <(
+            pgrep -P "${pid}" 2>/dev/null || true
+        )
+    done
+}
+
+any_pid_alive() {
+    local pid
+
+    for pid in "$@"; do
+        if pid_is_alive "${pid}"; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+wait_for_pids() {
+    local timeout_seconds="$1"
+    shift
+
+    local elapsed=0
+
+    while (( elapsed < timeout_seconds )); do
+        if ! any_pid_alive "$@"; then
+            return 0
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    ! any_pid_alive "$@"
+}
+
+signal_alive_pids() {
+    local signal="$1"
+    shift
+
+    local pid
+
+    for pid in "$@"; do
+        if pid_is_alive "${pid}"; then
+            kill -s "${signal}" "${pid}" 2>/dev/null || true
+        fi
+    done
+}
+
+stop_stack() {
+    if ! session_exists; then
+        echo "tmux session '${TMUX_SESSION}' is not running."
+        return 0
+    fi
+
+    local -a pane_pids=()
+    local -a stack_pids=()
+    local -a pane_targets=()
+
+    local pane_pid
+    local target
+
+    mapfile -t pane_pids < <(
+        tmux list-panes \
+            -s \
+            -t "${TMUX_SESSION}" \
+            -F '#{pane_pid}'
+    )
+
+    mapfile -t pane_targets < <(
+        tmux list-panes \
+            -s \
+            -t "${TMUX_SESSION}" \
+            -F '#{session_name}:#{window_name}.#{pane_index}'
+    )
+
+    for pane_pid in "${pane_pids[@]}"; do
+        while IFS= read -r target; do
+            stack_pids+=("${target}")
+        done < <(
+            collect_process_tree "${pane_pid}"
+        )
+    done
+
+    if (( ${#stack_pids[@]} > 0 )); then
+        mapfile -t stack_pids < <(
+            printf '%s\n' "${stack_pids[@]}" |
+                sort -n -u
+        )
+    fi
+
+    echo "Stopping tmux session '${TMUX_SESSION}'..."
+
+    for target in "${pane_targets[@]}"; do
+        tmux send-keys \
+            -t "${target}" \
+            C-c \
+            2>/dev/null || true
+    done
+
+    if (( ${#stack_pids[@]} > 0 )) &&
+        ! wait_for_pids 15 "${stack_pids[@]}"; then
+
+        echo "Processes still running; sending SIGINT."
+        signal_alive_pids INT "${stack_pids[@]}"
+
+        if ! wait_for_pids 15 "${stack_pids[@]}"; then
+            echo "Processes still running; sending SIGTERM."
+            signal_alive_pids TERM "${stack_pids[@]}"
+
+            if ! wait_for_pids 2 "${stack_pids[@]}"; then
+                echo "Processes still running; sending SIGKILL."
+                signal_alive_pids KILL "${stack_pids[@]}"
+            fi
+        fi
+    fi
+
+    tmux kill-session \
+        -t "${TMUX_SESSION}" \
+        2>/dev/null || true
+
+    echo "tmux session '${TMUX_SESSION}' stopped."
+}
+
+xrce_processes() {
+    pgrep -a -x MicroXRCEAgent 2>/dev/null || true
+}
+
+px4_processes() {
+    pgrep -a -x px4 2>/dev/null || true
+}
+
+gazebo_processes() {
+    ps -eo pid=,comm=,args= |
+        grep -E '[g]z sim|[g]z-sim|[r]uby.*gz' ||
+        true
+}
+
+qgc_processes() {
+    pgrep -af QGroundControl 2>/dev/null || true
+}
+
+show_component_status() {
+    local label="$1"
+    local configured="$2"
+    local process_function="$3"
+    local processes
+
+    processes="$("${process_function}")"
+
+    if [[ -n "${processes}" ]]; then
+        printf '%-16s running' "${label}:"
+
+        if [[ "${configured}" != "always" ]]; then
+            printf ' (configured %s)' "${configured}"
+        fi
+
+        echo
+
+        while IFS= read -r line; do
+            echo "  ${line}"
+        done <<< "${processes}"
+    else
+        printf '%-16s stopped' "${label}:"
+
+        if [[ "${configured}" != "always" ]]; then
+            printf ' (configured %s)' "${configured}"
+        fi
+
+        echo
+    fi
+}
+
+status_stack() {
+    echo "tmux session: ${TMUX_SESSION}"
+
+    if session_exists; then
+        echo "state: running"
+
+        tmux list-windows \
+            -t "${TMUX_SESSION}" \
+            -F '  #I: #W'
+    else
+        echo "state: stopped"
+    fi
+
+    echo
+
+    show_component_status \
+        "XRCE Agent" \
+        "${START_XRCE_AGENT}" \
+        xrce_processes
+
+    show_component_status \
+        "PX4" \
+        "always" \
+        px4_processes
+
+    show_component_status \
+        "Gazebo" \
+        "always" \
+        gazebo_processes
+
+    show_component_status \
+        "QGroundControl" \
+        "${START_QGC}" \
+        qgc_processes
+}
+
+case "${ACTION}" in
+    start)
+        start_stack
+        ;;
+    stop)
+        stop_stack
+        ;;
+    status)
+        status_stack
+        ;;
+esac
