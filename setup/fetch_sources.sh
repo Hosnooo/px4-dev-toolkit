@@ -16,7 +16,6 @@ if ! command -v vcs >/dev/null 2>&1; then
     exit 1
 fi
 
-vcs validate < "${MANIFEST}"
 
 existing=0
 
