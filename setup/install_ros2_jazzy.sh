@@ -3,6 +3,8 @@ set -euo pipefail
 
 source /etc/os-release
 
+# The repository has only been validated on Ubuntu 24.04. Refuse a different
+# host release instead of attempting a best-effort ROS installation.
 if [[ "${VERSION_ID}" != "24.04" ]]; then
     echo "ERROR: This environment targets Ubuntu 24.04."
     echo "Detected: ${PRETTY_NAME}"
@@ -12,6 +14,8 @@ fi
 if [[ -f /opt/ros/jazzy/setup.bash ]]; then
     echo "ROS 2 Jazzy is already installed."
 else
+    # Configure the official ROS 2 apt source, then install the Jazzy desktop
+    # environment plus the standard ROS development tools used by this repo.
     sudo apt update
     sudo apt install -y locales software-properties-common curl
 
@@ -37,6 +41,5 @@ else
         ros-jazzy-desktop \
         ros-dev-tools
 fi
-
 
 echo "ROS 2 Jazzy and repository tooling ready."

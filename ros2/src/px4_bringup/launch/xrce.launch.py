@@ -1,3 +1,5 @@
+"""Launch the Micro XRCE-DDS Agent used by PX4 SITL and ROS 2."""
+
 from pathlib import Path
 import shutil
 
@@ -6,6 +8,7 @@ from launch.actions import ExecuteProcess, LogInfo
 
 
 def find_repo_root() -> Path:
+    """Locate px4_env from the installed or source launch-file location."""
     start = Path(__file__).resolve()
 
     for path in (start.parent, *start.parents):
@@ -20,6 +23,7 @@ def find_repo_root() -> Path:
 
 
 def read_env_file(path: Path) -> dict[str, str]:
+    """Read the repository's simple KEY=VALUE configuration files."""
     values = {}
 
     for raw_line in path.read_text().splitlines():
@@ -39,11 +43,13 @@ def read_env_file(path: Path) -> dict[str, str]:
 
 def generate_launch_description() -> LaunchDescription:
     root = find_repo_root()
-    common = read_env_file(root / "config" / "common.env")
+    runtime = read_env_file(root / "config" / "env.env")
 
-    transport = common["XRCE_AGENT_TRANSPORT"]
-    port = common["XRCE_AGENT_PORT"]
+    transport = runtime["XRCE_AGENT_TRANSPORT"]
+    port = runtime["XRCE_AGENT_PORT"]
 
+    # The agent executable comes from the built ROS workspace. Requiring it on
+    # PATH here catches an unsourced/unbuilt workspace before starting PX4 I/O.
     agent = shutil.which("MicroXRCEAgent")
 
     if agent is None:

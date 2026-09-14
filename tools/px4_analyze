@@ -1,0 +1,119 @@
+#!/usr/bin/python3 -s
+
+"""
+Global PX4 rosbag analysis entry point.
+
+The CLI owns bag/profile discovery and common output handling. Experiment
+semantics live in small profile modules so future PID, geometric, MPC, and
+other controllers can add analysis without duplicating rosbag code.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import sys
+
+
+def find_repo_root() -> Path:
+    """Locate px4_env from this executable rather than the current shell path."""
+
+    start = Path(__file__).resolve()
+
+    for path in (start.parent, *start.parents):
+        if (
+            (path / "px4_env.repos").is_file()
+            and (path / "analysis").is_dir()
+            and (path / "ros2").is_dir()
+        ):
+            return path
+
+    raise RuntimeError(
+        f"Could not locate px4_env repository root from {start}"
+    )
+
+
+ROOT = find_repo_root()
+sys.path.insert(0, str(ROOT))
+
+from analysis.core import read_bag  # noqa: E402
+from analysis.profiles import get_profile  # noqa: E402
+
+
+def detect_profile_name(bag_path: Path) -> str:
+    """
+    Determine which experiment-specific analysis profile to use.
+
+    A future recorder may place experiment.json beside the bag metadata.
+    Until then, the established bags/<experiment>/<timestamp>/ layout provides
+    a deterministic fallback without adding another command-line argument.
+    """
+
+    metadata_path = bag_path / "experiment.json"
+
+    if metadata_path.is_file():
+        data = json.loads(metadata_path.read_text())
+        profile = data.get("profile")
+
+        if isinstance(profile, str) and profile:
+            return profile
+
+        raise RuntimeError(
+            f"Invalid analysis profile metadata: {metadata_path}"
+        )
+
+    return bag_path.parent.name
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("Usage:")
+        print("  ./tools/px4_analyze <bag-directory>")
+        return 2
+
+    bag_path = Path(sys.argv[1]).expanduser().resolve()
+
+    if not bag_path.is_dir():
+        raise RuntimeError(
+            f"Bag directory does not exist: {bag_path}"
+        )
+
+    profile_name = detect_profile_name(bag_path)
+    profile = get_profile(profile_name)
+
+    bag = read_bag(
+        bag_path,
+        profile.REQUIRED_TOPICS,
+    )
+    result = profile.analyze(bag)
+
+    output_dir = bag_path / "analysis"
+    output_dir.mkdir(exist_ok=True)
+
+    summary_path = output_dir / "summary.txt"
+    summary_path.write_text(result.summary)
+
+    print(result.summary, end="")
+    print(f"Summary: {summary_path}")
+
+    try:
+        generated = profile.write_plots(
+            result,
+            output_dir,
+        )
+    except RuntimeError as exc:
+        print(f"WARNING: {exc}", file=sys.stderr)
+        return 0
+
+    for path in generated:
+        print(f"Plot: {path}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1)

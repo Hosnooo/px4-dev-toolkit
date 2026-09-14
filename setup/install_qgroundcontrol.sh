@@ -9,6 +9,8 @@ QGC_DIR="${ROOT}/tools/qgroundcontrol"
 QGC_PATH="${QGC_DIR}/${QGC_FILENAME}"
 TMP_PATH="${QGC_PATH}.download"
 
+# QGroundControl is kept as a repository-managed AppImage rather than a system
+# package. Install only the host libraries required to run that AppImage.
 sudo apt update
 sudo apt install -y \
     libfuse2 \
@@ -18,6 +20,7 @@ sudo apt install -y \
 
 mkdir -p "${QGC_DIR}"
 
+# Reuse an existing download only when it matches the pinned checksum.
 if [[ -f "${QGC_PATH}" ]]; then
     if echo "${QGC_SHA256}  ${QGC_PATH}" | sha256sum --check --status; then
         echo "QGroundControl ${QGC_VERSION} already installed and verified."
@@ -32,6 +35,7 @@ echo "Downloading QGroundControl ${QGC_VERSION}..."
 
 curl -L "${QGC_URL}" -o "${TMP_PATH}"
 
+# Verify before moving the temporary download into the runnable location.
 echo "${QGC_SHA256}  ${TMP_PATH}" | sha256sum --check
 
 mv "${TMP_PATH}" "${QGC_PATH}"

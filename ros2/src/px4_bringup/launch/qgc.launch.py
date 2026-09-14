@@ -1,3 +1,5 @@
+"""Launch the repository-managed QGroundControl AppImage."""
+
 from pathlib import Path
 
 from launch import LaunchDescription
@@ -5,6 +7,7 @@ from launch.actions import ExecuteProcess, LogInfo
 
 
 def find_repo_root() -> Path:
+    """Locate px4_env from the installed or source launch-file location."""
     start = Path(__file__).resolve()
 
     for path in (start.parent, *start.parents):
@@ -19,6 +22,7 @@ def find_repo_root() -> Path:
 
 
 def read_env_file(path: Path) -> dict[str, str]:
+    """Read the repository's simple KEY=VALUE configuration files."""
     values = {}
 
     for raw_line in path.read_text().splitlines():
@@ -40,6 +44,9 @@ def generate_launch_description() -> LaunchDescription:
     root = find_repo_root()
     versions = read_env_file(root / "config" / "versions.env")
 
+    # QGroundControl is downloaded and checksum-verified by the setup script.
+    # Resolve the filename from versions.env so launch and installation stay
+    # tied to the same pinned AppImage.
     qgc_path = (
         root
         / "tools"

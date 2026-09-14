@@ -10,6 +10,8 @@ if [[ ! -f "${PX4}/Tools/setup/ubuntu.sh" ]]; then
     exit 1
 fi
 
+# Use the dependency installer shipped by the pinned PX4 checkout instead of
+# duplicating PX4's Ubuntu package list in this repository.
 echo "Installing PX4 development dependencies..."
 
 bash "${PX4}/Tools/setup/ubuntu.sh"

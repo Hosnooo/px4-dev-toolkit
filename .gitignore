@@ -1,21 +1,30 @@
-# External source repositories fetched from px4_env.repos
+# External source repositories fetched from px4_env.repos.
 /px4/PX4-Autopilot/
 /ros2/src/px4_msgs/
 /ros2/src/px4_ros_com/
 /ros2/src/Micro-XRCE-DDS-Agent/
+/tools/MAVProxy/
 
-# ROS 2 / colcon generated files
+# ROS 2 / colcon generated files.
 /ros2/build/
 /ros2/install/
 /ros2/log/
 
-# Downloaded applications
+# Repository-managed Python environments.
+/.venv/
+
+# Downloaded applications.
 /tools/qgroundcontrol/*.AppImage
 
-# Python
+# MAVProxy runtime artifacts.
+mav.parm
+mav.tlog*
+
+# Python/editor/OS noise.
 __pycache__/
 *.py[cod]
-
-# Editor / OS noise
 *~
 .DS_Store
+
+# Recorded experiment data and generated analysis outputs.
+/bags/

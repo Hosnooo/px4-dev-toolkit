@@ -2,7 +2,7 @@ repositories:
   px4/PX4-Autopilot:
     type: git
     url: https://github.com/ANCL/PX4-Autopilot.git
-    version: c2e7493fbea0b5b523521a2523ca047104fd56ee
+    version: f2c513cd25e0c055f31dfe16c0f7a2259f679098
 
   ros2/src/px4_msgs:
     type: git
@@ -18,3 +18,8 @@ repositories:
     type: git
     url: https://github.com/ANCL/px4_ros_com.git
     version: b9660a32e65e6129eefab874c7015f4feb725385
+
+  tools/MAVProxy:
+    type: git
+    url: https://github.com/ArduPilot/MAVProxy.git
+    version: 932f6945cfc7fbc6579e166667d43e327fe44f2d
