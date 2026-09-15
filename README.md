@@ -15,7 +15,7 @@ The goal is to provide a practical PX4 development environment that can be repro
 - automatic rosbag recording
 - centralized PX4 ROS topic definitions
 - generic PX4 multicopter control-pipeline analysis
-- publication-style tracking plots
+- tracking plots
 - layer-by-layer run summaries
 
 The currently validated host platform is Ubuntu 24.04 (Noble) with ROS 2 Jazzy.
