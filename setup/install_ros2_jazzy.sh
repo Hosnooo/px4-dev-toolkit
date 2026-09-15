@@ -42,4 +42,8 @@ else
         ros-dev-tools
 fi
 
-echo "ROS 2 Jazzy and repository tooling ready."
+# Install the ROS 2 bridge used to expose Gazebo Transport topics to ROS.
+sudo apt update
+sudo apt install -y ros-jazzy-ros-gz-bridge
+
+echo "ROS 2 Jazzy, ros_gz_bridge, and repository tooling ready."

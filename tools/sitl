@@ -123,22 +123,58 @@ launch_command() {
     printf 'bash -lc %q' "${command}"
 }
 
-# Build the exact command executed in the PX4 tmux window. PX4_GZ_WORLD is
-# passed explicitly, and HEADLESS=1 is used only for headless Gazebo startup.
+# Locate the system Gazebo command configuration installed on this workstation.
+gazebo_config_dir() {
+    local sim_config
+    local config_dir
+
+    if ! command -v dpkg-query >/dev/null 2>&1; then
+        echo "ERROR: dpkg-query is required to locate Gazebo." >&2
+        return 1
+    fi
+
+    sim_config="$(
+        dpkg-query -L gz-sim8-cli 2>/dev/null |
+            awk '/\/sim8\.yaml$/ { print; exit }'
+    )"
+
+    if [[ -z "${sim_config}" || ! -f "${sim_config}" ]]; then
+        echo "ERROR: Gazebo Harmonic command configuration was not found." >&2
+        echo "Run: ./setup/install_px4_dependencies.sh" >&2
+        return 1
+    fi
+
+    config_dir="${sim_config%/*}"
+
+    if ! GZ_CONFIG_PATH="${config_dir}" gz sim --versions >/dev/null 2>&1; then
+        echo "ERROR: Gazebo Harmonic is not usable from ${config_dir}." >&2
+        echo "Run: ./setup/install_px4_dependencies.sh" >&2
+        return 1
+    fi
+
+    printf '%s\n' "${config_dir}"
+}
+
+# Build the PX4 command with the system Gazebo environment.
 px4_command() {
     local command
+    local gz_config_dir
+
+    gz_config_dir="$(gazebo_config_dir)"
 
     if [[ "${HEADLESS}" == "true" ]]; then
         printf -v command \
-            'cd %q && exec env HEADLESS=1 PX4_GZ_WORLD=%q make %q %q' \
+            'cd %q && exec env GZ_CONFIG_PATH=%q HEADLESS=1 PX4_GZ_WORLD=%q make %q %q' \
             "${ROOT}/px4/PX4-Autopilot" \
+            "${gz_config_dir}" \
             "${PX4_GZ_WORLD}" \
             "${PX4_BUILD_TARGET}" \
             "${PX4_SIM_MODEL}"
     else
         printf -v command \
-            'cd %q && exec env -u HEADLESS PX4_GZ_WORLD=%q make %q %q' \
+            'cd %q && exec env -u HEADLESS GZ_CONFIG_PATH=%q PX4_GZ_WORLD=%q make %q %q' \
             "${ROOT}/px4/PX4-Autopilot" \
+            "${gz_config_dir}" \
             "${PX4_GZ_WORLD}" \
             "${PX4_BUILD_TARGET}" \
             "${PX4_SIM_MODEL}"

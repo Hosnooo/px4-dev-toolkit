@@ -45,6 +45,13 @@ set +u
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
 set -u
 
+# ros_gz_bridge is provided by the system ROS installation, not this workspace.
+if ! ros2 pkg prefix ros_gz_bridge >/dev/null 2>&1; then
+    echo "ERROR: ros_gz_bridge is not installed." >&2
+    echo "Run: ./setup/install_ros2_jazzy.sh" >&2
+    exit 1
+fi
+
 cd "${PX4_ENV_ROOT}/ros2"
 colcon build
 EOF_BUILD
