@@ -1,4 +1,4 @@
-# PX4 topics recorded for the native AUTO_TAKEOFF -> AUTO_LOITER experiment.
+# PX4 topics recorded for the headless Position-mode takeoff/hover experiment.
 
 OUT_VEHICLE_STATUS_V1
 OUT_VEHICLE_CONTROL_MODE
@@ -10,8 +10,9 @@ OUT_FAILSAFE_FLAGS
 OUT_ESTIMATOR_STATUS_FLAGS
 OUT_BATTERY_STATUS
 OUT_VEHICLE_COMMAND_ACK
-OUT_MODE_COMPLETED
+OUT_MANUAL_CONTROL_SETPOINT
 IN_VEHICLE_COMMAND
+IN_MANUAL_CONTROL_INPUT
 
 # Controller-observation signals used by the analyzer.
 OUT_TRAJECTORY_SETPOINT

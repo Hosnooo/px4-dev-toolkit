@@ -1,4 +1,7 @@
-// ROS 2 -> PX4 discrete vehicle commands such as arm and takeoff.
+// Headless manual-control input used by Position-mode tests.
+PX4_TOPIC(IN_MANUAL_CONTROL_INPUT, "/fmu/in/manual_control_input")
+
+// ROS 2 -> PX4 discrete vehicle commands.
 PX4_TOPIC(IN_VEHICLE_COMMAND, "/fmu/in/vehicle_command")
 
 // Final actuator commands produced by PX4 control allocation.
@@ -13,7 +16,10 @@ PX4_TOPIC(OUT_ESTIMATOR_STATUS_FLAGS, "/fmu/out/estimator_status_flags")
 // Active PX4 failsafe conditions.
 PX4_TOPIC(OUT_FAILSAFE_FLAGS, "/fmu/out/failsafe_flags")
 
-// Completion result for PX4 navigation modes such as AUTO_TAKEOFF.
+// Manual-control input selected by PX4.
+PX4_TOPIC(OUT_MANUAL_CONTROL_SETPOINT, "/fmu/out/manual_control_setpoint")
+
+// Completion result for PX4 navigation modes that report completion.
 PX4_TOPIC(OUT_MODE_COMPLETED, "/fmu/out/mode_completed")
 
 // Native PX4 position/velocity/acceleration trajectory reference.

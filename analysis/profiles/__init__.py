@@ -1,11 +1,11 @@
 
 """Experiment-specific analysis profiles."""
 
-from . import auto_takeoff_hold
+from . import position_takeoff_hover
 
 
 PROFILES = {
-    auto_takeoff_hold.PROFILE_NAME: auto_takeoff_hold,
+    position_takeoff_hover.PROFILE_NAME: position_takeoff_hover,
 }
 
 

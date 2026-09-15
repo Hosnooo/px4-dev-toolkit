@@ -12,7 +12,6 @@ The goal is to provide a practical PX4 development environment that can be repro
 - MAVProxy and QGroundControl support
 - reusable SITL launcher
 - ROS 2 runtime environment
-- native PX4 `AUTO_TAKEOFF -> AUTO_LOITER` reference experiment
 - automatic rosbag recording
 - centralized PX4 ROS topic definitions
 - generic PX4 multicopter control-pipeline analysis
@@ -100,44 +99,12 @@ The current default configuration uses:
 
 The ground-control frontend can be configured to use MAVProxy, QGroundControl, or none.
 
-## Reference experiment
-
-The first included experiment exercises the native PX4 flight stack using:
-
-```text
-ARM
- ↓
-AUTO_TAKEOFF
- ↓
-AUTO_LOITER
-```
-
-It does not use an external Offboard controller for the flight-control loop.
-
-Run the experiment with recording enabled:
-
-```bash
-source ros2/runtime_env.sh
-
-ros2 launch px4_auto_takeoff_hold \
-  auto_takeoff_hold.launch.py \
-  record:=true
-```
-
-Recorded runs are stored under:
-
-```text
-bags/auto_takeoff_hold/
-```
-
-The `bags/` directory is runtime data and is intentionally excluded from Git.
-
 ## PX4 control-pipeline analysis
 
 Analyze a recorded run with:
 
 ```bash
-./tools/px4_analyze bags/auto_takeoff_hold/<run>
+./tools/px4_analyze bags/<experiment>/<run>
 ```
 
 The analyzer follows the native PX4 multicopter control pipeline using signals exposed through ROS 2.

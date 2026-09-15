@@ -12,6 +12,16 @@ MAVPROXY_BIN="${ROOT}/.venv/mavproxy/bin/mavproxy.py"
 ACTION="${1:-}"
 HEADLESS=false
 
+PX4_PARAMETER_OVERRIDES=(
+    PX4_PARAM_EKF2_EV_CTRL
+    PX4_PARAM_EKF2_GPS_CTRL
+    PX4_PARAM_EKF2_HGT_REF
+    PX4_PARAM_EKF2_BARO_CTRL
+    PX4_PARAM_EKF2_MAG_TYPE
+    PX4_PARAM_EKF2_RNG_CTRL
+    PX4_PARAM_EKF2_OF_CTRL
+)
+
 # This wrapper owns the local SITL lifecycle. It starts PX4/Gazebo plus the
 # configured ROS and ground-control services in one tmux session, and `stop`
 # also cleans up Gazebo if the simulator has detached from that process tree.
@@ -82,6 +92,10 @@ require_config_value PX4_BUILD_TARGET
 require_config_value PX4_SIM_MODEL
 require_config_value PX4_GZ_WORLD
 require_config_value GCS
+
+for name in "${PX4_PARAMETER_OVERRIDES[@]}"; do
+    require_config_value "${name}"
+done
 
 if [[ "${START_XRCE_AGENT}" == "true" ]]; then
     require_config_value XRCE_AGENT_TRANSPORT
@@ -159,26 +173,37 @@ gazebo_config_dir() {
 px4_command() {
     local command
     local gz_config_dir
+    local name
+    local assignment
 
     gz_config_dir="$(gazebo_config_dir)"
 
+    printf -v command \
+        'cd %q && exec env' \
+        "${ROOT}/px4/PX4-Autopilot"
+
     if [[ "${HEADLESS}" == "true" ]]; then
-        printf -v command \
-            'cd %q && exec env GZ_CONFIG_PATH=%q HEADLESS=1 PX4_GZ_WORLD=%q make %q %q' \
-            "${ROOT}/px4/PX4-Autopilot" \
-            "${gz_config_dir}" \
-            "${PX4_GZ_WORLD}" \
-            "${PX4_BUILD_TARGET}" \
-            "${PX4_SIM_MODEL}"
+        command+=" HEADLESS=1"
     else
-        printf -v command \
-            'cd %q && exec env -u HEADLESS GZ_CONFIG_PATH=%q PX4_GZ_WORLD=%q make %q %q' \
-            "${ROOT}/px4/PX4-Autopilot" \
-            "${gz_config_dir}" \
-            "${PX4_GZ_WORLD}" \
-            "${PX4_BUILD_TARGET}" \
-            "${PX4_SIM_MODEL}"
+        command+=" -u HEADLESS"
     fi
+
+    printf -v assignment ' GZ_CONFIG_PATH=%q' "${gz_config_dir}"
+    command+="${assignment}"
+
+    printf -v assignment ' PX4_GZ_WORLD=%q' "${PX4_GZ_WORLD}"
+    command+="${assignment}"
+
+    for name in "${PX4_PARAMETER_OVERRIDES[@]}"; do
+        printf -v assignment ' %s=%q' "${name}" "${!name}"
+        command+="${assignment}"
+    done
+
+    printf -v assignment \
+        ' make %q %q' \
+        "${PX4_BUILD_TARGET}" \
+        "${PX4_SIM_MODEL}"
+    command+="${assignment}"
 
     printf 'bash -lc %q' "${command}"
 }

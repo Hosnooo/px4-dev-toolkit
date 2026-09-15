@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(px4_auto_takeoff_hold)
+project(px4_position_takeoff_hover)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -9,8 +9,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 
-add_executable(auto_takeoff_hold
-  src/auto_takeoff_hold.cpp
+add_executable(position_takeoff_hover
+  src/position_takeoff_hover.cpp
 )
 
 get_filename_component(
@@ -19,17 +19,17 @@ get_filename_component(
   ABSOLUTE
 )
 
-target_include_directories(auto_takeoff_hold PRIVATE
+target_include_directories(position_takeoff_hover PRIVATE
   "${PX4_ENV_ROOT}/config"
 )
 
-ament_target_dependencies(auto_takeoff_hold
+ament_target_dependencies(position_takeoff_hover
   rclcpp
   px4_msgs
 )
 
 install(
-  TARGETS auto_takeoff_hold
+  TARGETS position_takeoff_hover
   DESTINATION lib/${PROJECT_NAME}
 )
 

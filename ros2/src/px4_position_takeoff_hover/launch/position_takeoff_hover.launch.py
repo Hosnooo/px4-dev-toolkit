@@ -19,13 +19,8 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-# The flight node exits immediately after PX4 confirms AUTO_LOITER.
-# Keep recording for a fixed window afterward so hold drift and velocity can
-# be measured without keeping the C++ flight node alive.
-HOLD_RECORD_SECONDS = 20.0
-
 # ros2 bag is started before the maneuver. Give DDS discovery a short window
-# before the flight node starts so early arm/takeoff traffic is not missed.
+# before the flight node starts so early mode/arm traffic is not missed.
 RECORDER_STARTUP_SECONDS = 1.0
 
 
@@ -107,11 +102,11 @@ def launch_argument_is_true(context, name: str) -> bool:
 
 
 def make_flight_node() -> Node:
-    """Create the finite native-PX4 takeoff/hold node used by both launch modes."""
+    """Create the finite Position-mode flight node used by both launch modes."""
     return Node(
-        package="px4_auto_takeoff_hold",
-        executable="auto_takeoff_hold",
-        name="auto_takeoff_hold",
+        package="px4_position_takeoff_hover",
+        executable="position_takeoff_hover",
+        name="position_takeoff_hover",
         output="screen",
         emulate_tty=True,
     )
@@ -122,8 +117,7 @@ def launch_setup(context):
     Build either the simple flight launch or the recording orchestration.
 
     Without recording, the launch contains only the finite flight node.
-    With recording, rosbag starts first, then the flight runs, then rosbag
-    remains alive for HOLD_RECORD_SECONDS after successful AUTO_LOITER entry.
+    With recording, rosbag starts first and stops after the complete maneuver.
     """
     record = launch_argument_is_true(context, "record")
     flight_node = make_flight_node()
@@ -131,10 +125,10 @@ def launch_setup(context):
     if not record:
         def on_flight_exit(event, _context):
             reason = (
-                "auto_takeoff_hold completed."
+                "position_takeoff_hover completed."
                 if event.returncode == 0
                 else
-                f"auto_takeoff_hold exited with status {event.returncode}."
+                f"position_takeoff_hover exited with status {event.returncode}."
             )
 
             return [
@@ -155,7 +149,7 @@ def launch_setup(context):
 
     repo_root = find_repo_root()
     package_share = Path(
-        get_package_share_directory("px4_auto_takeoff_hold")
+        get_package_share_directory("px4_position_takeoff_hover")
     )
     topic_file = package_share / "config" / "recording_topics.txt"
     topic_catalog_file = repo_root / "config" / "px4_topics.def"
@@ -164,10 +158,9 @@ def launch_setup(context):
     topics = read_recording_topics(topic_file, topic_catalog)
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    bag_root = repo_root / "bags" / "auto_takeoff_hold"
+    bag_root = repo_root / "bags" / "position_takeoff_hover"
     bag_path = bag_root / timestamp
 
-    # rosbag creates the timestamp directory itself, but its parent must exist.
     bag_root.mkdir(parents=True, exist_ok=True)
 
     bag_process = ExecuteProcess(
@@ -177,46 +170,31 @@ def launch_setup(context):
             "record",
             "--output",
             str(bag_path),
+            "--topics",
             *topics,
         ],
-        name="auto_takeoff_hold_recorder",
+        name="position_takeoff_hover_recorder",
         output="screen",
         emulate_tty=True,
     )
 
     def on_flight_exit(event, _context):
-        if event.returncode != 0:
-            return [
-                LogInfo(
-                    msg=(
-                        "auto_takeoff_hold failed; stopping recording "
-                        "without the post-hold window."
-                    )
-                ),
-                EmitEvent(
-                    event=ShutdownProcess(
-                        process_matcher=matches_action(bag_process)
-                    )
-                ),
-            ]
+        if event.returncode == 0:
+            message = (
+                "Position-mode flight complete; stopping recording."
+            )
+
+        else:
+            message = (
+                "Position-mode flight failed; stopping recording."
+            )
 
         return [
-            LogInfo(
-                msg=(
-                    "AUTO_LOITER confirmed. Continuing recording for "
-                    f"{HOLD_RECORD_SECONDS:.0f} seconds."
+            LogInfo(msg=message),
+            EmitEvent(
+                event=ShutdownProcess(
+                    process_matcher=matches_action(bag_process)
                 )
-            ),
-            TimerAction(
-                period=HOLD_RECORD_SECONDS,
-                actions=[
-                    LogInfo(msg="Post-hold recording complete."),
-                    EmitEvent(
-                        event=ShutdownProcess(
-                            process_matcher=matches_action(bag_process)
-                        )
-                    ),
-                ],
             ),
         ]
 
@@ -268,8 +246,8 @@ def generate_launch_description() -> LaunchDescription:
                 "record",
                 default_value="false",
                 description=(
-                    "Record the core PX4 experiment topics and keep recording "
-                    "for 20 seconds after AUTO_LOITER is confirmed."
+                    "Record the complete Position-mode takeoff, hover, "
+                    "landing, and disarm sequence."
                 ),
             ),
             OpaqueFunction(function=launch_setup),
