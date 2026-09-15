@@ -179,7 +179,7 @@ px4_command() {
     gz_config_dir="$(gazebo_config_dir)"
 
     printf -v command \
-        'cd %q && exec env' \
+        'cd %q && exec env -u GTK_PATH' \
         "${ROOT}/px4/PX4-Autopilot"
 
     if [[ "${HEADLESS}" == "true" ]]; then
