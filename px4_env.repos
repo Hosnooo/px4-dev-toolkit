@@ -2,7 +2,7 @@ repositories:
   px4/PX4-Autopilot:
     type: git
     url: https://github.com/ANCL/PX4-Autopilot.git
-    version: f2c513cd25e0c055f31dfe16c0f7a2259f679098
+    version: fdba3a6f56465d05767d30cb617681acc07a6fd9
 
   ros2/src/px4_msgs:
     type: git
