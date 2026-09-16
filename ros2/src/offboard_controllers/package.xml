@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>px4_position_takeoff_hover</name>
+  <name>offboard_controllers</name>
   <version>0.1.0</version>
-  <description>ROS 2 package for headless PX4 Position-mode takeoff, hover, landing, and experiment recording.</description>
+  <description>ROS 2 package for PX4 Offboard controller prerequisites, controllers, and experiment recording.</description>
 
   <maintainer email="mohssen.elshaar@gmail.com">Mohssene</maintainer>
   <license>Apache-2.0</license>

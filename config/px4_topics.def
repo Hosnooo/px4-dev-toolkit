@@ -1,5 +1,8 @@
-// Headless manual-control input used by Position-mode tests.
-PX4_TOPIC(IN_MANUAL_CONTROL_INPUT, "/fmu/in/manual_control_input")
+// ROS 2 -> PX4 Offboard control-level heartbeat.
+PX4_TOPIC(IN_OFFBOARD_CONTROL_MODE, "/fmu/in/offboard_control_mode")
+
+// ROS 2 -> PX4 position/velocity/acceleration trajectory setpoint.
+PX4_TOPIC(IN_TRAJECTORY_SETPOINT, "/fmu/in/trajectory_setpoint")
 
 // ROS 2 -> PX4 discrete vehicle commands.
 PX4_TOPIC(IN_VEHICLE_COMMAND, "/fmu/in/vehicle_command")

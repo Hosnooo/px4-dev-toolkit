@@ -8,6 +8,7 @@ source "${ROOT}/config/env.env"
 RUNTIME_ENV="${ROOT}/ros2/runtime_env.sh"
 TMUX_CONFIG="${ROOT}/config/tmux.conf"
 MAVPROXY_BIN="${ROOT}/.venv/mavproxy/bin/mavproxy.py"
+MAVPROXY_MODULES_DIR="${ROOT}/tools/mavproxy_modules"
 
 ACTION="${1:-}"
 HEADLESS=false
@@ -107,9 +108,9 @@ if [[ "${GCS}" == "mavproxy" ]]; then
 fi
 
 case "${GCS}" in
-    qgc|mavproxy|none) ;;
+    qgc|mavproxy) ;;
     *)
-        echo "ERROR: GCS must be 'qgc', 'mavproxy', or 'none'."
+        echo "ERROR: GCS must be 'qgc' or 'mavproxy'."
         exit 1
         ;;
 esac
@@ -209,6 +210,7 @@ px4_command() {
 }
 
 # MAVProxy runs from its isolated repository-managed Python environment.
+# In headless mode it also loads the repository's software joystick.
 mavproxy_command() {
     if [[ ! -x "${MAVPROXY_BIN}" ]]; then
         echo "ERROR: MAVProxy is not installed:" >&2
@@ -216,12 +218,28 @@ mavproxy_command() {
         exit 1
     fi
 
+    if [[ "${HEADLESS}" == "true" ]] &&
+        [[ ! -f "${MAVPROXY_MODULES_DIR}/virtual_joystick.py" ]]; then
+        echo "ERROR: virtual joystick module is missing:" >&2
+        echo "  ${MAVPROXY_MODULES_DIR}/virtual_joystick.py" >&2
+        exit 1
+    fi
+
     local command
+    local argument
 
     printf -v command \
-        'exec env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 %q %q' \
-        "${MAVPROXY_BIN}" \
-        "--master=${MAVPROXY_MASTER}"
+        'exec env -u PYTHONHOME PYTHONNOUSERSITE=1 PYTHONPATH=%q %q' \
+        "${MAVPROXY_MODULES_DIR}" \
+        "${MAVPROXY_BIN}"
+
+    printf -v argument ' %q' "--master=${MAVPROXY_MASTER}"
+    command+="${argument}"
+
+    if [[ "${HEADLESS}" == "true" ]]; then
+        printf -v argument ' %q' '--cmd=module load virtual_joystick'
+        command+="${argument}"
+    fi
 
     printf 'bash -lc %q' "${command}"
 }
@@ -245,15 +263,6 @@ start_stack() {
         exec tmux attach-session -t "${TMUX_SESSION}"
     fi
 
-    local effective_gcs="${GCS}"
-
-    # A graphical QGC window defeats the purpose of a headless run. MAVProxy
-    # remains allowed because it is terminal-based.
-    if [[ "${HEADLESS}" == "true" ]] &&
-        [[ "${effective_gcs}" == "qgc" ]]; then
-        effective_gcs=none
-    fi
-
     local px4_command_line
     px4_command_line="$(px4_command)"
 
@@ -273,7 +282,7 @@ start_stack() {
             "${xrce_command}"
     fi
 
-    case "${effective_gcs}" in
+    case "${GCS}" in
         qgc)
             local qgc_command
             qgc_command="$(launch_command qgc.launch.py)"
@@ -291,8 +300,6 @@ start_stack() {
                 -t "${TMUX_SESSION}:" \
                 -n mavproxy \
                 "${mavproxy_command_line}"
-            ;;
-        none)
             ;;
     esac
 
@@ -635,9 +642,6 @@ status_stack() {
                 "MAVProxy" \
                 "mavproxy" \
                 mavproxy_processes
-            ;;
-        none)
-            printf '%-16s stopped (configured none)\n' "Ground control:"
             ;;
     esac
 }

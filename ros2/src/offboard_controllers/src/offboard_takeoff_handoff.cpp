@@ -3,10 +3,10 @@
 #include <cstdint>
 #include <memory>
 
+#include <offboard_controllers/offboard_config.hpp>
 #include <px4_control_common/virtual_joystick_client.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
 #include <px4_msgs/msg/vehicle_command_ack.hpp>
-#include <px4_msgs/msg/vehicle_land_detected.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <px4_msgs/msg/vehicle_status.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -23,26 +23,26 @@ namespace px4_topics
 
 
 /*
- * Minimal headless PX4 Position-mode flight sequence:
+ * Optional Position-mode staging helper for Offboard tests:
  *
  *   wait for PX4 readiness and a valid local position
  *       -> set the background virtual joystick to minimum throttle
  *       -> switch to Position mode
  *       -> arm
- *       -> command a climb of approximately 2 m
- *       -> center the joystick and hover for 20 seconds
- *       -> ask PX4 to land at the current position
- *       -> wait for PX4 to land and disarm
+ *       -> climb to the configured Offboard initial z
+ *       -> center the joystick and hold in Position mode
+ *       -> wait until an independent controller enters Offboard
+ *       -> exit while MAVProxy keeps the centered joystick alive
  *
- * MAVProxy owns the continuous MANUAL_CONTROL stream. This node only changes
- * the virtual-joystick state through the local control socket; it does not
- * publish PX4 manual-control input through DDS.
+ * This helper never requests Offboard itself.
  */
-class PositionTakeoffHover : public rclcpp::Node
+class OffboardTakeoffHandoff : public rclcpp::Node
 {
 public:
-  PositionTakeoffHover()
-  : Node("position_takeoff_hover")
+  OffboardTakeoffHandoff()
+  : Node("offboard_takeoff_handoff"),
+    initial_setpoint_(
+      offboard_controllers::load_initial_setpoint(*this))
   {
     const auto sensor_qos = rclcpp::SensorDataQoS();
 
@@ -60,15 +60,6 @@ public:
       sensor_qos,
       [this](const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg) {
         handle_local_position(*msg);
-      });
-
-    vehicle_land_detected_sub_ =
-      create_subscription<px4_msgs::msg::VehicleLandDetected>(
-      px4_topics::OUT_VEHICLE_LAND_DETECTED,
-      sensor_qos,
-      [this](const px4_msgs::msg::VehicleLandDetected::SharedPtr msg) {
-        landed_ = msg->landed;
-        land_detected_received_ = true;
       });
 
     vehicle_command_ack_sub_ =
@@ -94,6 +85,11 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
+      "Configured Offboard staging altitude: z=%.2f",
+      static_cast<double>(initial_setpoint_.z));
+
+    RCLCPP_INFO(
+      get_logger(),
       "Waiting for PX4 vehicle status and valid local position.");
   }
 
@@ -113,15 +109,12 @@ private:
     WAIT_PREFLIGHT,
     WAIT_ARM,
     CLIMB,
-    HOVER,
-    WAIT_LAND,
+    WAIT_OFFBOARD,
     DONE,
   };
 
-  static constexpr float kClimbHeightM = 2.0F;
   static constexpr float kPrearmThrottle = -1.0F;
   static constexpr float kClimbThrottle = 0.60F;
-
   static constexpr double kJoystickWarmupSeconds = 1.0;
 
   static constexpr float kCustomModeEnabled = 1.0F;
@@ -195,8 +188,7 @@ private:
 
     if (
       msg.command != VehicleCommand::VEHICLE_CMD_DO_SET_MODE &&
-      msg.command != VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM &&
-      msg.command != VehicleCommand::VEHICLE_CMD_NAV_LAND)
+      msg.command != VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM)
     {
       return;
     }
@@ -303,28 +295,6 @@ private:
   }
 
 
-  void publish_land_command()
-  {
-    px4_msgs::msg::VehicleCommand msg{};
-
-    msg.param1 = NAN;
-    msg.param2 = NAN;
-    msg.param3 = NAN;
-    msg.param4 = NAN;
-    msg.param5 = NAN;
-    msg.param6 = NAN;
-    msg.param7 = NAN;
-
-    msg.command =
-      px4_msgs::msg::VehicleCommand::VEHICLE_CMD_NAV_LAND;
-
-    fill_command_metadata(msg);
-    vehicle_command_pub_->publish(msg);
-
-    RCLCPP_INFO(get_logger(), "Land command sent.");
-  }
-
-
   void fill_command_metadata(
     px4_msgs::msg::VehicleCommand & msg)
   {
@@ -355,7 +325,7 @@ private:
   {
     RCLCPP_ERROR(
       get_logger(),
-      "Position-mode experiment failed: %s",
+      "Offboard takeoff handoff failed: %s",
       reason);
 
     exit_code_ = 1;
@@ -370,17 +340,18 @@ private:
   {
     RCLCPP_INFO(
       get_logger(),
-      "Position-mode takeoff and hover sequence complete.");
+      "PX4 Offboard mode active; virtual joystick remains centered "
+      "and the staging helper is exiting.");
 
     exit_code_ = 0;
     set_phase(Phase::DONE);
 
     try {
-      virtual_joystick_.set(0.0, 0.0, kPrearmThrottle, 0.0);
+      virtual_joystick_.center();
     } catch (const std::exception & error) {
       RCLCPP_WARN(
         get_logger(),
-        "Could not reset virtual joystick after landing: %s",
+        "Could not leave virtual joystick centered: %s",
         error.what());
     }
 
@@ -394,6 +365,15 @@ private:
     using VehicleStatus = px4_msgs::msg::VehicleStatus;
 
     if (phase_ == Phase::DONE) {
+      return;
+    }
+
+    if (
+      phase_ == Phase::WAIT_OFFBOARD &&
+      status_received_ &&
+      nav_state_ == VehicleStatus::NAVIGATION_STATE_OFFBOARD)
+    {
+      complete();
       return;
     }
 
@@ -448,19 +428,14 @@ private:
 
       case Phase::WAIT_POSITION_MODE:
         if (nav_state_ == VehicleStatus::NAVIGATION_STATE_POSCTL) {
-          start_x_ = local_x_;
-          start_y_ = local_y_;
-          start_z_ = local_z_;
-          target_z_ = start_z_ - kClimbHeightM;
-
           RCLCPP_INFO(
             get_logger(),
             "PX4 Position mode active: "
             "x=%.2f y=%.2f z=%.2f target_z=%.2f",
-            static_cast<double>(start_x_),
-            static_cast<double>(start_y_),
-            static_cast<double>(start_z_),
-            static_cast<double>(target_z_));
+            static_cast<double>(local_x_),
+            static_cast<double>(local_y_),
+            static_cast<double>(local_z_),
+            static_cast<double>(initial_setpoint_.z));
 
           set_phase(Phase::WAIT_PREFLIGHT);
           return;
@@ -503,7 +478,8 @@ private:
 
           RCLCPP_INFO(
             get_logger(),
-            "Vehicle armed; starting climb.");
+            "Vehicle armed; climbing to configured z=%.2f.",
+            static_cast<double>(initial_setpoint_.z));
 
           set_phase(Phase::CLIMB);
           return;
@@ -522,70 +498,36 @@ private:
           return;
         }
 
-        if (local_z_ <= target_z_) {
+        if (local_z_ <= initial_setpoint_.z) {
           if (!center_joystick()) {
             return;
           }
 
           RCLCPP_INFO(
             get_logger(),
-            "Climb target reached: z=%.2f. "
-            "Centering sticks for 20-second hover.",
+            "Configured staging altitude reached: z=%.2f. "
+            "Centering joystick and waiting for Offboard takeover.",
             static_cast<double>(local_z_));
 
-          set_phase(Phase::HOVER);
+          set_phase(Phase::WAIT_OFFBOARD);
           return;
         }
 
         if (phase_elapsed_seconds() > 15.0) {
-          fail("Vehicle did not reach the climb target.");
+          fail("Vehicle did not reach the configured staging altitude.");
         }
 
         return;
 
 
-      case Phase::HOVER:
+      case Phase::WAIT_OFFBOARD:
         if (arming_state_ != VehicleStatus::ARMING_STATE_ARMED) {
-          fail("Vehicle disarmed during hover.");
+          fail("Vehicle disarmed while waiting for Offboard takeover.");
           return;
         }
 
-        if (phase_elapsed_seconds() >= 20.0) {
-          RCLCPP_INFO(
-            get_logger(),
-            "Hover complete; asking PX4 to land.");
-
-          publish_land_command();
-          set_phase(Phase::WAIT_LAND);
-        }
-
-        return;
-
-
-      case Phase::WAIT_LAND:
-        if (arming_state_ == VehicleStatus::ARMING_STATE_DISARMED) {
-          RCLCPP_INFO(
-            get_logger(),
-            "PX4 landed and disarmed.");
-
-          complete();
-          return;
-        }
-
-        if (
-          land_detected_received_ &&
-          landed_ &&
-          !landed_reported_)
-        {
-          RCLCPP_INFO(
-            get_logger(),
-            "PX4 reports landed; waiting for automatic disarm.");
-
-          landed_reported_ = true;
-        }
-
-        if (phase_elapsed_seconds() > 30.0) {
-          fail("PX4 did not complete landing and disarm.");
+        if (nav_state_ != VehicleStatus::NAVIGATION_STATE_POSCTL) {
+          fail("PX4 left Position mode before Offboard takeover.");
         }
 
         return;
@@ -605,6 +547,7 @@ private:
   }
 
 
+  const offboard_controllers::InitialSetpoint initial_setpoint_;
   px4_control_common::VirtualJoystickClient virtual_joystick_;
 
   rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr
@@ -612,9 +555,6 @@ private:
 
   rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr
     vehicle_local_position_sub_;
-
-  rclcpp::Subscription<px4_msgs::msg::VehicleLandDetected>::SharedPtr
-    vehicle_land_detected_sub_;
 
   rclcpp::Subscription<px4_msgs::msg::VehicleCommandAck>::SharedPtr
     vehicle_command_ack_sub_;
@@ -629,9 +569,6 @@ private:
 
   bool status_received_{false};
   bool local_position_valid_{false};
-  bool land_detected_received_{false};
-  bool landed_{true};
-  bool landed_reported_{false};
 
   bool pre_flight_checks_pass_{false};
   bool waiting_for_preflight_reported_{false};
@@ -639,11 +576,6 @@ private:
   float local_x_{NAN};
   float local_y_{NAN};
   float local_z_{NAN};
-
-  float start_x_{NAN};
-  float start_y_{NAN};
-  float start_z_{NAN};
-  float target_z_{NAN};
 
   std::uint8_t arming_state_{0};
   std::uint8_t nav_state_{0};
@@ -657,7 +589,7 @@ int main(int argc, char * argv[])
   rclcpp::init(argc, argv);
 
   auto node =
-    std::make_shared<PositionTakeoffHover>();
+    std::make_shared<OffboardTakeoffHandoff>();
 
   rclcpp::spin(node);
 

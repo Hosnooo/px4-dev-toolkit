@@ -1,4 +1,4 @@
-# PX4 topics recorded for the headless Position-mode takeoff/hover experiment.
+# PX4 topics recorded for the Position-mode takeoff and Offboard handoff.
 
 OUT_VEHICLE_STATUS_V1
 OUT_VEHICLE_CONTROL_MODE
@@ -11,9 +11,12 @@ OUT_ESTIMATOR_STATUS_FLAGS
 OUT_BATTERY_STATUS
 OUT_VEHICLE_COMMAND_ACK
 OUT_MANUAL_CONTROL_SETPOINT
-IN_VEHICLE_COMMAND
 
-# Controller-observation signals used by the analyzer.
+IN_VEHICLE_COMMAND
+IN_OFFBOARD_CONTROL_MODE
+IN_TRAJECTORY_SETPOINT
+
+# Controller-observation signals useful around the handoff.
 OUT_TRAJECTORY_SETPOINT
 OUT_VEHICLE_LOCAL_POSITION_SETPOINT
 OUT_VEHICLE_ATTITUDE_SETPOINT

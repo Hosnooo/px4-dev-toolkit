@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>px4_control_common</name>
+  <version>0.1.0</version>
+  <description>Small shared helpers for PX4 ROS 2 control utilities.</description>
+
+  <maintainer email="mohssen.elshaar@gmail.com">Mohssene</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
