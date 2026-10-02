@@ -53,11 +53,17 @@ public:
     const RotationMatrix & attitude,
     const RotationMatrix & desired_attitude) const;
 
+  // Toolkit cascaded attitude-to-rate law used by the attitude_rate handoff.
+  // The returned value is a body-rate setpoint; Lee's physical moment
+  // controller does not use this intermediate command.
   Vector3 compute_attitude_rate_command(
     const RotationMatrix & attitude,
     const DesiredAttitudeRate & desired) const;
 
-  Vector3 compute_normalized_torque_command(
+  // Toolkit-specific normalized SO(3) controller. It uses Lee's geometric
+  // error definitions but outputs PX4-normalized torque directly; it is not
+  // Lee's physical moment equation.
+  GeometricNormalizedOutput compute_geometric_normalized_torque(
     const RotationMatrix & attitude,
     const Vector3 & angular_velocity,
     const DesiredAttitudeDynamics & desired) const;

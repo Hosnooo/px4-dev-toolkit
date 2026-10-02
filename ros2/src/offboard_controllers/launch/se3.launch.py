@@ -150,6 +150,10 @@ def make_control_node() -> Node:
                     LaunchConfiguration("trajectory"),
                 "handoff":
                     LaunchConfiguration("handoff"),
+                "direct_controller":
+                    LaunchConfiguration(
+                        "direct_controller"
+                    ),
                 "vehicle_config_dir":
                     str(
                         package_share
@@ -352,6 +356,14 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "handoff",
                 default_value="acceleration",
+            ),
+            DeclareLaunchArgument(
+                "direct_controller",
+                default_value="geometric_normalized",
+                description=(
+                    "Rotational controller used when "
+                    "handoff:=thrust_and_torque."
+                ),
             ),
             DeclareLaunchArgument(
                 "record",

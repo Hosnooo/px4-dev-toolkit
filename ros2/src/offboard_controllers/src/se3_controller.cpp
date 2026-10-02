@@ -273,7 +273,7 @@ Vector3 desired_angular_acceleration(
 }
 
 
-Vector3 desired_rate_in_current_body(
+Vector3 desired_angular_velocity_in_current_body(
   const RotationMatrix & attitude,
   const RotationMatrix & desired_attitude,
   const Vector3 & desired_angular_velocity)
@@ -308,8 +308,12 @@ Controller::Controller(const Parameters & parameters)
     "SE3 attitude gain must be finite and non-negative.");
 
   require_nonnegative_finite(
-    parameters_.normalized_rate_gain,
-    "SE3 normalized rate gain must be finite and non-negative.");
+    parameters_.normalized_attitude_gain,
+    "SE3 normalized attitude gain must be finite and non-negative.");
+
+  require_nonnegative_finite(
+    parameters_.normalized_angular_velocity_gain,
+    "SE3 normalized angular-velocity gain must be finite and non-negative.");
 
   require_nonnegative_finite(
     parameters_.normalized_angular_acceleration_gain,
@@ -597,7 +601,12 @@ Vector3 Controller::compute_attitude_error(
             "SE3 attitude error requires finite rotations.");
   }
 
-  // e_R = 1/2 (R_d^T R - R^T R_d)^vee
+  // Lee, Leok, McClamroch (CDC 2010), Eq. (10):
+  //
+  //   e_R = 1/2 (R_d^T R - R^T R_d)^vee
+  //
+  // R and R_d map FRD body coordinates into NED. The resulting geometric
+  // attitude error is expressed in the current FRD body frame.
   return {
     0.5 * (
       dot(desired_attitude.b3, attitude.b2) -
@@ -631,13 +640,18 @@ Vector3 Controller::compute_attitude_rate_command(
       desired.attitude);
 
   const Vector3 feedforward =
-    desired_rate_in_current_body(
+    desired_angular_velocity_in_current_body(
       attitude,
       desired.attitude,
       desired.angular_velocity);
 
-  // Lee/MRS-style cascaded attitude loop. PX4 owns the inner rate loop for
-  // handoff:=attitude_rate.
+  // Toolkit cascaded geometric attitude-to-rate law:
+  //
+  //   Omega_sp = R^T R_d Omega_d - K_att e_R
+  //
+  // Omega_d is the desired-attitude kinematic reference. Omega_sp is the
+  // controller-generated body-rate setpoint handed to PX4. This cascade is
+  // deliberately separate from Lee's direct physical-moment controller.
   return
     feedforward -
     component_product(
@@ -646,7 +660,7 @@ Vector3 Controller::compute_attitude_rate_command(
 }
 
 
-Vector3 Controller::compute_normalized_torque_command(
+GeometricNormalizedOutput Controller::compute_geometric_normalized_torque(
   const RotationMatrix & attitude,
   const Vector3 & angular_velocity,
   const DesiredAttitudeDynamics & desired) const
@@ -659,47 +673,75 @@ Vector3 Controller::compute_normalized_torque_command(
     !is_finite(desired.angular_acceleration))
   {
     throw std::invalid_argument(
-            "SE3 normalized torque command requires finite inputs.");
+            "SE3 geometric-normalized torque requires finite inputs.");
   }
 
-  const DesiredAttitudeRate desired_rate{
-    desired.attitude,
-    desired.angular_velocity,
-  };
-
-  const Vector3 angular_velocity_command =
-    compute_attitude_rate_command(
+  // Lee 2010, Eq. (10).
+  const Vector3 attitude_error =
+    compute_attitude_error(
       attitude,
-      desired_rate);
+      desired.attitude);
 
-  const Vector3 rate_error =
-    angular_velocity_command - angular_velocity;
-
-  const Vector3 angular_velocity_feedforward =
-    desired_rate_in_current_body(
+  const Vector3 desired_angular_velocity_current_body =
+    desired_angular_velocity_in_current_body(
       attitude,
       desired.attitude,
       desired.angular_velocity);
 
-  // d/dt(R^T R_d Omega_d), expressed in the current body frame.
+  // Lee 2010, Eq. (11):
+  //
+  //   e_Omega = Omega - R^T R_d Omega_d
+  //
+  // Omega_d is the angular velocity of R_d itself, not a body-rate command.
+  const Vector3 angular_velocity_error =
+    angular_velocity -
+    desired_angular_velocity_current_body;
+
+  // Time derivative of R^T R_d Omega_d, expressed in the current body frame:
+  //
+  //   alpha_ff = -Omega x (R^T R_d Omega_d)
+  //              + R^T R_d dot(Omega_d)
   const Vector3 angular_acceleration_feedforward =
     -cross(
       angular_velocity,
-      angular_velocity_feedforward) +
-    desired_rate_in_current_body(
+      desired_angular_velocity_current_body) +
+    desired_angular_velocity_in_current_body(
       attitude,
       desired.attitude,
       desired.angular_acceleration);
 
-  // VehicleTorqueSetpoint is normalized/unitless. This is intentionally a
-  // normalized cascaded controller rather than a physical moment equation.
-  return
-    component_product(
-      parameters_.normalized_rate_gain,
-      rate_error) +
+  // Toolkit normalized geometric controller:
+  //
+  //   tau_n = -K_R^n e_R - K_Omega^n e_Omega
+  //           + K_alpha^n alpha_ff
+  //
+  // This deliberately preserves Lee's SO(3) tracking errors but does not
+  // implement Lee 2010 Eq. (13): there is no physical inertia J, gyroscopic
+  // moment Omega x J Omega, or N*m output here. tau_n is directly in the
+  // normalized coordinates expected by PX4 VehicleTorqueSetpoint.
+  const Vector3 attitude_feedback =
+    -component_product(
+      parameters_.normalized_attitude_gain,
+      attitude_error);
+
+  const Vector3 angular_velocity_feedback =
+    -component_product(
+      parameters_.normalized_angular_velocity_gain,
+      angular_velocity_error);
+
+  const Vector3 acceleration_feedforward =
     component_product(
       parameters_.normalized_angular_acceleration_gain,
       angular_acceleration_feedforward);
+
+  return {
+    attitude_feedback,
+    angular_velocity_feedback,
+    acceleration_feedforward,
+    attitude_feedback +
+    angular_velocity_feedback +
+    acceleration_feedforward,
+  };
 }
 
 
@@ -731,7 +773,7 @@ Vector3 Controller::compute_physical_moment_command(
       desired.attitude);
 
   const Vector3 angular_velocity_feedforward =
-    desired_rate_in_current_body(
+    desired_angular_velocity_in_current_body(
       attitude,
       desired.attitude,
       desired.angular_velocity);
@@ -743,7 +785,7 @@ Vector3 Controller::compute_physical_moment_command(
     -cross(
       angular_velocity,
       angular_velocity_feedforward) +
-    desired_rate_in_current_body(
+    desired_angular_velocity_in_current_body(
       attitude,
       desired.attitude,
       desired.angular_acceleration);

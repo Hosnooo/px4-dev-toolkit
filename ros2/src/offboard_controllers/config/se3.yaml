@@ -6,17 +6,31 @@ se3:
     kx_over_mass: 16.0
     kv_over_mass: 5.6
 
-    # Geometric attitude error -> desired FRD body-rate correction [1/s].
-    # Initial values follow the pinned PX4 multicopter attitude P scale.
+    # Toolkit cascaded attitude error -> FRD body-rate correction [1/s].
+    # Used by the attitude_rate handoff; it is not part of Lee's direct
+    # physical-moment controller. Initial values follow the pinned PX4
+    # multicopter attitude P scale as a starting numerical scale.
     attitude_gain: [6.5, 6.5, 2.8]
 
-    # PX4-normalized external rotational-controller gains. These are unitless
-    # controller-output scales, not physical moment gains in N*m.
-    # Initial rate values follow the pinned PX4 rate-loop P scale.
-    normalized_rate_gain: [0.15, 0.15, 0.20]
+    # Toolkit geometric-normalized controller gains. These act directly on
+    # e_R, e_Omega, and the transported desired angular acceleration to produce
+    # PX4-normalized torque; they are not physical moment gains.
+    #
+    # K_R^n is chosen as attitude_gain * K_Omega^n component-wise so the
+    # attitude/rate feedback scaling is consistent with the toolkit's
+    # cascaded attitude-rate path without introducing an intermediate rate
+    # command in this controller.
+    normalized_attitude_gain: [0.975, 0.975, 0.56]
 
-    # Desired angular-acceleration feedforward into normalized torque.
-    # Initial magnitudes follow the pinned PX4 roll/pitch rate-D scale; the
+    # Maps angular-velocity error [rad/s] into normalized torque. Initial
+    # values follow the pinned PX4 rate-loop P scale only as a starting
+    # numerical scale; this is not the PX4 rate controller.
+    normalized_angular_velocity_gain: [0.15, 0.15, 0.20]
+
+    # Maps transported desired angular acceleration [rad/s^2] into normalized
+    # torque. Initial magnitudes follow the pinned PX4 roll/pitch rate-D scale
+    # only as a starting numerical scale. This is desired-acceleration
+    # feed-forward, not PX4's measured-angular-acceleration D feedback; the
     # pinned PX4 yaw D gain is zero.
     normalized_angular_acceleration_gain: [0.003, 0.003, 0.0]
 

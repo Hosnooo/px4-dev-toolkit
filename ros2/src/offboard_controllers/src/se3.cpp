@@ -57,14 +57,15 @@ namespace
 constexpr char kTrajectoryReferenceTopic[] =
   "/px4_toolkit/se3/trajectory_reference";
 
-constexpr char kDirectRateCommandTopic[] =
-  "/px4_toolkit/se3/rate_command";
+constexpr char kGeometricNormalizedAttitudeFeedbackTopic[] =
+  "/px4_toolkit/se3/geometric_normalized/torque_attitude_feedback";
 
-constexpr char kTorqueRateFeedbackTopic[] =
-  "/px4_toolkit/se3/torque_rate_feedback";
+constexpr char kGeometricNormalizedAngularVelocityFeedbackTopic[] =
+  "/px4_toolkit/se3/geometric_normalized/torque_angular_velocity_feedback";
 
-constexpr char kTorqueAngularAccelerationFeedforwardTopic[] =
-  "/px4_toolkit/se3/torque_angular_acceleration_feedforward";
+constexpr char kGeometricNormalizedAngularAccelerationFeedforwardTopic[] =
+  "/px4_toolkit/se3/geometric_normalized/"
+  "torque_angular_acceleration_feedforward";
 
 
 double load_vehicle_mass(
@@ -238,6 +239,11 @@ public:
         "handoff",
         "");
 
+    direct_controller_ =
+      declare_parameter<std::string>(
+        "direct_controller",
+        "geometric_normalized");
+
     const std::string vehicle_config_dir =
       declare_parameter<std::string>(
         "vehicle_config_dir",
@@ -265,12 +271,19 @@ public:
           std::vector<double>{}),
         "attitude_gain");
 
-    const se3::Vector3 normalized_rate_gain =
+    const se3::Vector3 normalized_attitude_gain =
       vector3_parameter(
         declare_parameter<std::vector<double>>(
-          "normalized_rate_gain",
+          "normalized_attitude_gain",
           std::vector<double>{}),
-        "normalized_rate_gain");
+        "normalized_attitude_gain");
+
+    const se3::Vector3 normalized_angular_velocity_gain =
+      vector3_parameter(
+        declare_parameter<std::vector<double>>(
+          "normalized_angular_velocity_gain",
+          std::vector<double>{}),
+        "normalized_angular_velocity_gain");
 
     const se3::Vector3 normalized_angular_acceleration_gain =
       vector3_parameter(
@@ -334,6 +347,17 @@ public:
     }
 
     if (
+      handoff_ == "thrust_and_torque" &&
+      direct_controller_ != "geometric_normalized")
+    {
+      throw std::invalid_argument(
+              "SE3 direct_controller '" +
+              direct_controller_ +
+              "' is not implemented. Available direct controllers: "
+              "geometric_normalized.");
+    }
+
+    if (
       !std::isfinite(kx_over_mass) ||
       kx_over_mass <= 0.0)
     {
@@ -369,9 +393,6 @@ public:
           trajectory_config,
           trajectory_name_));
 
-    normalized_rate_gain_ =
-      normalized_rate_gain;
-
     controller_ =
       std::make_unique<se3::Controller>(
         se3::Parameters{
@@ -379,7 +400,8 @@ public:
           mass * kx_over_mass,
           mass * kv_over_mass,
           attitude_gain,
-          normalized_rate_gain,
+          normalized_attitude_gain,
+          normalized_angular_velocity_gain,
           normalized_angular_acceleration_gain,
         });
 
@@ -418,19 +440,19 @@ public:
         kTrajectoryReferenceTopic,
         10);
 
-    direct_rate_command_pub_ =
-      create_publisher<px4_msgs::msg::VehicleRatesSetpoint>(
-        kDirectRateCommandTopic,
+    geometric_normalized_attitude_feedback_pub_ =
+      create_publisher<px4_msgs::msg::VehicleTorqueSetpoint>(
+        kGeometricNormalizedAttitudeFeedbackTopic,
         10);
 
-    torque_rate_feedback_pub_ =
+    geometric_normalized_angular_velocity_feedback_pub_ =
       create_publisher<px4_msgs::msg::VehicleTorqueSetpoint>(
-        kTorqueRateFeedbackTopic,
+        kGeometricNormalizedAngularVelocityFeedbackTopic,
         10);
 
-    torque_angular_acceleration_feedforward_pub_ =
+    geometric_normalized_angular_acceleration_feedforward_pub_ =
       create_publisher<px4_msgs::msg::VehicleTorqueSetpoint>(
-        kTorqueAngularAccelerationFeedforwardTopic,
+        kGeometricNormalizedAngularAccelerationFeedforwardTopic,
         10);
 
     vehicle_command_pub_ =
@@ -507,6 +529,13 @@ public:
       mass,
       kx_over_mass,
       kv_over_mass);
+
+    if (handoff_ == "thrust_and_torque") {
+      RCLCPP_INFO(
+        get_logger(),
+        "SE3 direct controller: %s",
+        direct_controller_.c_str());
+    }
   }
 
 private:
@@ -945,50 +974,50 @@ private:
   }
 
 
-  void publish_direct_torque_diagnostics(
-    const se3::Vector3 & angular_velocity_command,
-    const se3::Vector3 & rate_feedback,
-    const se3::Vector3 & angular_acceleration_feedforward)
+  void publish_geometric_normalized_diagnostics(
+    const se3::GeometricNormalizedOutput & output)
   {
     const uint64_t timestamp =
       timestamp_us(*this);
 
-    px4_msgs::msg::VehicleRatesSetpoint rate{};
-    rate.timestamp = timestamp;
-    rate.roll =
-      static_cast<float>(
-        angular_velocity_command.x);
-    rate.pitch =
-      static_cast<float>(
-        angular_velocity_command.y);
-    rate.yaw =
-      static_cast<float>(
-        angular_velocity_command.z);
-    rate.reset_integral = false;
-
-    px4_msgs::msg::VehicleTorqueSetpoint feedback{};
-    feedback.timestamp = timestamp;
-    feedback.xyz = {
-      static_cast<float>(rate_feedback.x),
-      static_cast<float>(rate_feedback.y),
-      static_cast<float>(rate_feedback.z),
+    px4_msgs::msg::VehicleTorqueSetpoint attitude{};
+    attitude.timestamp = timestamp;
+    attitude.xyz = {
+      static_cast<float>(output.attitude_feedback.x),
+      static_cast<float>(output.attitude_feedback.y),
+      static_cast<float>(output.attitude_feedback.z),
     };
 
-    px4_msgs::msg::VehicleTorqueSetpoint feedforward{};
-    feedforward.timestamp = timestamp;
-    feedforward.xyz = {
+    px4_msgs::msg::VehicleTorqueSetpoint angular_velocity{};
+    angular_velocity.timestamp = timestamp;
+    angular_velocity.xyz = {
       static_cast<float>(
-        angular_acceleration_feedforward.x),
+        output.angular_velocity_feedback.x),
       static_cast<float>(
-        angular_acceleration_feedforward.y),
+        output.angular_velocity_feedback.y),
       static_cast<float>(
-        angular_acceleration_feedforward.z),
+        output.angular_velocity_feedback.z),
     };
 
-    direct_rate_command_pub_->publish(rate);
-    torque_rate_feedback_pub_->publish(feedback);
-    torque_angular_acceleration_feedforward_pub_->publish(
-      feedforward);
+    px4_msgs::msg::VehicleTorqueSetpoint angular_acceleration{};
+    angular_acceleration.timestamp = timestamp;
+    angular_acceleration.xyz = {
+      static_cast<float>(
+        output.angular_acceleration_feedforward.x),
+      static_cast<float>(
+        output.angular_acceleration_feedforward.y),
+      static_cast<float>(
+        output.angular_acceleration_feedforward.z),
+    };
+
+    geometric_normalized_attitude_feedback_pub_->publish(
+      attitude);
+
+    geometric_normalized_angular_velocity_feedback_pub_->publish(
+      angular_velocity);
+
+    geometric_normalized_angular_acceleration_feedforward_pub_->publish(
+      angular_acceleration);
   }
 
 
@@ -1144,44 +1173,25 @@ private:
         reference.yaw_rate,
         reference.yaw_acceleration);
 
-    const se3::DesiredAttitudeRate desired_rate{
-      desired.attitude,
-      desired.angular_velocity,
-    };
+    if (direct_controller_ == "geometric_normalized") {
+      const se3::GeometricNormalizedOutput direct_output =
+        controller_->compute_geometric_normalized_torque(
+          state_.attitude,
+          state_.angular_velocity,
+          desired);
 
-    const se3::Vector3 angular_velocity_command =
-      controller_->compute_attitude_rate_command(
-        state_.attitude,
-        desired_rate);
+      publish_geometric_normalized_diagnostics(
+        direct_output);
 
-    const se3::Vector3 rate_error =
-      angular_velocity_command -
-      state_.angular_velocity;
+      publish_thrust_and_torque_setpoint(
+        output.force_vector,
+        direct_output.normalized_torque);
 
-    const se3::Vector3 rate_feedback =
-      se3::component_product(
-        normalized_rate_gain_,
-        rate_error);
+      return;
+    }
 
-    const se3::Vector3 normalized_torque =
-      controller_->compute_normalized_torque_command(
-        state_.attitude,
-        state_.angular_velocity,
-        desired);
-
-    const se3::Vector3
-      angular_acceleration_feedforward =
-      normalized_torque -
-      rate_feedback;
-
-    publish_direct_torque_diagnostics(
-      angular_velocity_command,
-      rate_feedback,
-      angular_acceleration_feedforward);
-
-    publish_thrust_and_torque_setpoint(
-      output.force_vector,
-      normalized_torque);
+    throw std::logic_error(
+            "SE3 reached an unvalidated direct-controller selection.");
   }
 
 
@@ -1295,14 +1305,13 @@ private:
   double hover_thrust_{
     std::numeric_limits<double>::quiet_NaN()};
 
-  se3::Vector3 normalized_rate_gain_{};
-
   RuntimeTiming runtime_timing_{};
   int valid_setpoint_count_{0};
 
   std::string vehicle_;
   std::string trajectory_name_;
   std::string handoff_;
+  std::string direct_controller_;
 
   rclcpp::Time trajectory_start_time_{0, 0, RCL_ROS_TIME};
 
@@ -1335,16 +1344,16 @@ private:
     vehicle_torque_setpoint_pub_;
 
   rclcpp::Publisher<
-    px4_msgs::msg::VehicleRatesSetpoint>::SharedPtr
-    direct_rate_command_pub_;
+    px4_msgs::msg::VehicleTorqueSetpoint>::SharedPtr
+    geometric_normalized_attitude_feedback_pub_;
 
   rclcpp::Publisher<
     px4_msgs::msg::VehicleTorqueSetpoint>::SharedPtr
-    torque_rate_feedback_pub_;
+    geometric_normalized_angular_velocity_feedback_pub_;
 
   rclcpp::Publisher<
     px4_msgs::msg::VehicleTorqueSetpoint>::SharedPtr
-    torque_angular_acceleration_feedforward_pub_;
+    geometric_normalized_angular_acceleration_feedforward_pub_;
 
   rclcpp::Publisher<
     px4_msgs::msg::VehicleCommand>::SharedPtr

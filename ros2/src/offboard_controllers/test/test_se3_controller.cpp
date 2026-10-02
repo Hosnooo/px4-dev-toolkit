@@ -76,6 +76,7 @@ offboard_controllers::se3::Controller make_controller()
     8.0,
     6.0,
     {6.5, 6.5, 2.8},
+    {0.975, 0.975, 0.56},
     {0.15, 0.15, 0.20},
     {0.003, 0.003, 0.0},
   });
@@ -348,6 +349,7 @@ void test_rate_feedforward_is_rotated_into_current_body_frame()
     8.0,
     6.0,
     {0.0, 0.0, 0.0},
+    {0.975, 0.975, 0.56},
     {0.15, 0.15, 0.20},
     {0.003, 0.003, 0.0},
   });
@@ -493,7 +495,7 @@ void test_desired_angular_acceleration_from_yaw()
 }
 
 
-void test_normalized_torque_uses_rate_and_acceleration_feedforward()
+void test_geometric_normalized_torque_uses_direct_geometric_errors()
 {
   using namespace offboard_controllers::se3;
 
@@ -505,21 +507,66 @@ void test_normalized_torque_uses_rate_and_acceleration_feedforward()
     {1.0, 2.0, 3.0},
   };
 
-  const Vector3 torque =
-    controller.compute_normalized_torque_command(
+  const GeometricNormalizedOutput output =
+    controller.compute_geometric_normalized_torque(
       yaw_rotation(0.0),
       {0.0, 0.0, 0.5},
       desired);
 
   expect_vector_near(
-    "normalized torque",
-    torque,
+    "zero attitude feedback",
+    output.attitude_feedback,
+    {});
+  expect_vector_near(
+    "angular-velocity feedback",
+    output.angular_velocity_feedback,
+    {0.0, 0.0, 0.1});
+  expect_vector_near(
+    "angular-acceleration feedforward",
+    output.angular_acceleration_feedforward,
+    {0.003, 0.006, 0.0});
+  expect_vector_near(
+    "geometric-normalized torque",
+    output.normalized_torque,
     {0.003, 0.006, 0.1});
 }
 
 
+void test_geometric_normalized_torque_uses_attitude_error_directly()
+{
+  using namespace offboard_controllers::se3;
 
-void test_normalized_torque_includes_rotating_frame_acceleration()
+  const Controller controller = make_controller();
+  const double yaw_error = 0.1;
+
+  const DesiredAttitudeDynamics desired{
+    yaw_rotation(0.0),
+    {},
+    {},
+  };
+
+  const GeometricNormalizedOutput output =
+    controller.compute_geometric_normalized_torque(
+      yaw_rotation(yaw_error),
+      {},
+      desired);
+
+  expect_vector_near(
+    "zero angular-velocity feedback",
+    output.angular_velocity_feedback,
+    {});
+  expect_near(
+    "direct normalized yaw attitude feedback",
+    output.attitude_feedback.z,
+    -0.56 * std::sin(yaw_error));
+  expect_near(
+    "direct normalized yaw torque",
+    output.normalized_torque.z,
+    -0.56 * std::sin(yaw_error));
+}
+
+
+void test_geometric_normalized_torque_includes_rotating_frame_acceleration()
 {
   using namespace offboard_controllers::se3;
 
@@ -531,12 +578,23 @@ void test_normalized_torque_includes_rotating_frame_acceleration()
     {},
   };
 
-  expect_vector_near(
-    "normalized rotating-frame torque",
-    controller.compute_normalized_torque_command(
+  const GeometricNormalizedOutput output =
+    controller.compute_geometric_normalized_torque(
       yaw_rotation(0.0),
       {0.0, 0.0, 1.0},
-      desired),
+      desired);
+
+  expect_vector_near(
+    "rotating-frame angular-velocity feedback",
+    output.angular_velocity_feedback,
+    {0.0, 0.15, -0.20});
+  expect_vector_near(
+    "rotating-frame angular-acceleration feedforward",
+    output.angular_acceleration_feedforward,
+    {0.003, 0.0, 0.0});
+  expect_vector_near(
+    "normalized rotating-frame torque",
+    output.normalized_torque,
     {0.003, 0.15, -0.20});
 }
 
@@ -656,6 +714,7 @@ void test_invalid_parameters()
       8.0,
       6.0,
       {6.5, 6.5, 2.8},
+      {0.975, 0.975, 0.56},
       {0.15, 0.15, 0.20},
       {0.003, 0.003, 0.0},
     });
@@ -690,8 +749,9 @@ int main()
   test_desired_angular_acceleration_matches_rate_derivative();
   test_attitude_feedback_sign();
   test_desired_angular_acceleration_from_yaw();
-  test_normalized_torque_uses_rate_and_acceleration_feedforward();
-  test_normalized_torque_includes_rotating_frame_acceleration();
+  test_geometric_normalized_torque_uses_direct_geometric_errors();
+  test_geometric_normalized_torque_uses_attitude_error_directly();
+  test_geometric_normalized_torque_includes_rotating_frame_acceleration();
   test_physical_moment_is_in_physical_dynamics_form();
   test_physical_moment_includes_desired_angular_acceleration();
   test_invalid_attitude_geometry();

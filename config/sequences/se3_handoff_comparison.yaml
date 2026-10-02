@@ -36,4 +36,5 @@ steps:
       vehicle: gz_f450
       trajectory: full_excitation
       handoff: thrust_and_torque
+      direct_controller: geometric_normalized
       record: true

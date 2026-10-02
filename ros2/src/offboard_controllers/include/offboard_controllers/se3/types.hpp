@@ -77,13 +77,15 @@ struct Parameters
   double kx{0.0};
   double kv{0.0};
 
-  // Geometric attitude-error gain maps attitude error [rad] to body-rate
-  // correction [rad/s].
+  // Toolkit cascaded attitude-to-rate gain. It maps the dimensionless SO(3)
+  // attitude error e_R to a corrective FRD body-rate command [rad/s].
   Vector3 attitude_gain{};
 
-  // PX4-normalized rotational-controller gains. These do not represent
-  // physical moment gains in N m.
-  Vector3 normalized_rate_gain{};
+  // Toolkit geometric-normalized gains. These map the geometric tracking
+  // terms directly into PX4-normalized torque coordinates; they are not
+  // physical Lee moment gains.
+  Vector3 normalized_attitude_gain{};
+  Vector3 normalized_angular_velocity_gain{};
   Vector3 normalized_angular_acceleration_gain{};
 };
 
@@ -108,7 +110,9 @@ struct DesiredAttitudeRate
 {
   RotationMatrix attitude{};
 
-  // Desired angular velocity expressed in the desired FRD body frame.
+  // Omega_d: angular velocity of the desired attitude trajectory, expressed
+  // in the desired FRD body frame. This is a kinematic reference, not an
+  // attitude-controller-generated body-rate setpoint.
   Vector3 angular_velocity{};
 };
 
@@ -117,10 +121,21 @@ struct DesiredAttitudeDynamics
 {
   RotationMatrix attitude{};
 
-  // Desired angular velocity and acceleration expressed in the desired FRD
-  // body frame.
+  // Omega_d and dot(Omega_d) are kinematic derivatives of R_d, expressed in
+  // the desired FRD body frame. Neither quantity is an inner-loop rate command.
   Vector3 angular_velocity{};
   Vector3 angular_acceleration{};
+};
+
+
+struct GeometricNormalizedOutput
+{
+  // Controller contributions and final command in PX4-normalized FRD torque
+  // coordinates. The three contributions sum to normalized_torque.
+  Vector3 attitude_feedback{};
+  Vector3 angular_velocity_feedback{};
+  Vector3 angular_acceleration_feedforward{};
+  Vector3 normalized_torque{};
 };
 
 }  // namespace offboard_controllers::se3
