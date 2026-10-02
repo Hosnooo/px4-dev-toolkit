@@ -29,7 +29,7 @@ steps:
       handoff: attitude_rate
       record: true
 
-  - name: thrust_and_torque
+  - name: thrust_and_torque_geometric_normalized
     package: offboard_controllers
     launch: se3.launch.py
     arguments:
@@ -37,4 +37,24 @@ steps:
       trajectory: full_excitation
       handoff: thrust_and_torque
       direct_controller: geometric_normalized
+      record: true
+
+  - name: thrust_and_torque_px4_rate
+    package: offboard_controllers
+    launch: se3.launch.py
+    arguments:
+      vehicle: gz_f450
+      trajectory: full_excitation
+      handoff: thrust_and_torque
+      direct_controller: px4_rate
+      record: true
+
+  - name: thrust_and_torque_lee_physical
+    package: offboard_controllers
+    launch: se3.launch.py
+    arguments:
+      vehicle: gz_f450
+      trajectory: full_excitation
+      handoff: thrust_and_torque
+      direct_controller: lee_physical
       record: true

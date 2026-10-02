@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 
 from analysis.core import (
@@ -93,6 +94,12 @@ OPTIONAL_TOPICS = {
     GEOMETRIC_NORMALIZED_ANGULAR_ACCELERATION_FEEDFORWARD_TOPIC,
 }
 
+DIRECT_CONTROLLERS = {
+    "geometric_normalized",
+    "px4_rate",
+    "lee_physical",
+}
+
 
 @dataclass
 class AnalysisResult:
@@ -171,6 +178,78 @@ def _first_armed_time(
             return sample.timestamp_ns
 
     return None
+
+
+def _direct_controller_name(
+    bag: BagData,
+    handoff_mode: str,
+) -> str | None:
+    """Identify the direct controller without guessing from PX4 outputs."""
+    if handoff_mode != "thrust_and_torque":
+        return None
+
+    metadata_path = bag.path / "experiment.json"
+
+    if metadata_path.is_file():
+        try:
+            metadata = json.loads(
+                metadata_path.read_text()
+            )
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Invalid experiment metadata JSON: {metadata_path}"
+            ) from exc
+
+        if not isinstance(metadata, dict):
+            raise RuntimeError(
+                f"Experiment metadata must be a JSON object: {metadata_path}"
+            )
+
+        arguments = metadata.get("arguments", {})
+
+        if not isinstance(arguments, dict):
+            raise RuntimeError(
+                f"Experiment arguments must be a JSON object: {metadata_path}"
+            )
+
+        metadata_handoff = arguments.get("handoff")
+
+        if (
+            metadata_handoff is not None
+            and metadata_handoff != handoff_mode
+        ):
+            raise RuntimeError(
+                "SE3 sequence metadata handoff does not match "
+                "the recorded OffboardControlMode."
+            )
+
+        direct_controller = arguments.get(
+            "direct_controller"
+        )
+
+        if direct_controller is not None:
+            if direct_controller not in DIRECT_CONTROLLERS:
+                raise RuntimeError(
+                    "Unknown SE3 direct controller in experiment metadata: "
+                    f"{direct_controller}"
+                )
+
+            return str(direct_controller)
+
+    # Older geometric-normalized bags can still be identified from their
+    # controller-owned diagnostic topics. px4_rate and lee_physical cannot
+    # be distinguished reliably from native PX4 wrench topics alone.
+    if any(
+        bag.samples.get(topic)
+        for topic in (
+            GEOMETRIC_NORMALIZED_ATTITUDE_FEEDBACK_TOPIC,
+            GEOMETRIC_NORMALIZED_ANGULAR_VELOCITY_FEEDBACK_TOPIC,
+            GEOMETRIC_NORMALIZED_ANGULAR_ACCELERATION_FEEDFORWARD_TOPIC,
+        )
+    ):
+        return "geometric_normalized"
+
+    return "unknown"
 
 
 def extract_se3_layers(
@@ -356,6 +435,7 @@ def _se3_summary(
     layers: dict[str, object],
     pipeline: dict[str, object],
     handoff_mode: str,
+    direct_controller: str | None,
 ) -> list[str]:
     reference_position = layers["reference"]["position"]
     reference_velocity = layers["reference"]["velocity"]
@@ -378,7 +458,13 @@ def _se3_summary(
         default=0,
     )
 
-    title = f"SE3 {handoff_mode}-Handoff Pipeline Summary"
+    if direct_controller is None:
+        title = f"SE3 {handoff_mode}-Handoff Pipeline Summary"
+    else:
+        title = (
+            f"SE3 {handoff_mode} / "
+            f"{direct_controller} Pipeline Summary"
+        )
     lines = [
         title,
         "=" * len(title),
@@ -552,6 +638,12 @@ def analyze(bag: BagData) -> AnalysisResult:
         bag,
         offboard_mode,
     )
+
+    direct_controller = _direct_controller_name(
+        bag,
+        handoff_mode,
+    )
+
     handoff_topics = [topic for topic, _ in handoff_inputs]
     handoff_topic = " + ".join(handoff_topics)
     reference = _required(
@@ -631,6 +723,7 @@ def analyze(bag: BagData) -> AnalysisResult:
         "bag_duration_s": bag.duration_s,
         "handoff": handoff_mode,
         "handoff_topic": handoff_topic,
+        "direct_controller": direct_controller or "n/a",
         "started_armed": started_armed,
         "armed_s": bag.relative_seconds(armed_ns),
         "offboard_mode_start_s": bag.relative_seconds(
@@ -722,6 +815,11 @@ def analyze(bag: BagData) -> AnalysisResult:
             "",
             "SE3 Offboard lifecycle:",
             f"  handoff input: {handoff_topic}",
+            *(
+                [f"  direct controller: {direct_controller}"]
+                if direct_controller is not None
+                else []
+            ),
             f"  started armed: "
             f"{'yes' if started_armed else 'no'}",
             f"  armed state first recorded: "
@@ -749,6 +847,7 @@ def analyze(bag: BagData) -> AnalysisResult:
                 layers,
                 pipeline,
                 handoff_mode,
+                direct_controller,
             ),
         ]
     )

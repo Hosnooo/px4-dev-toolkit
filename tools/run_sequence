@@ -224,12 +224,15 @@ def bag_directories(root: Path) -> set[Path]:
 def retain_recorded_bags(
     run_dir: Path,
     index: int,
-    step_name: str,
+    sequence_name: str,
+    step: dict[str, object],
     bags: list[Path],
 ) -> list[str]:
     """Move bags produced by one step into the sequence study."""
     if not bags:
         return []
+
+    step_name = str(step["name"])
 
     study_bag_dir = run_dir / "bags"
     study_bag_dir.mkdir(exist_ok=True)
@@ -260,16 +263,54 @@ def retain_recorded_bags(
         except OSError:
             pass
 
-        profile_path = destination / "experiment.json"
+        experiment_path = destination / "experiment.json"
 
-        if not profile_path.exists():
-            profile_path.write_text(
-                json.dumps(
-                    {"profile": profile_name},
-                    indent=2,
+        experiment = {}
+
+        if experiment_path.exists():
+            try:
+                experiment = json.loads(
+                    experiment_path.read_text()
                 )
-                + "\n"
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    "Invalid experiment metadata JSON: "
+                    f"{experiment_path}"
+                ) from exc
+
+            if not isinstance(experiment, dict):
+                raise RuntimeError(
+                    "Experiment metadata must be a JSON object: "
+                    f"{experiment_path}"
+                )
+
+        existing_profile = experiment.get("profile")
+
+        if (
+            existing_profile is not None
+            and existing_profile != profile_name
+        ):
+            raise RuntimeError(
+                "Recorded bag profile metadata does not match "
+                f"its source directory: {experiment_path}"
             )
+
+        experiment.update(
+            {
+                "profile": profile_name,
+                "sequence": sequence_name,
+                "step": step_name,
+                "arguments": dict(step["arguments"]),
+            }
+        )
+
+        experiment_path.write_text(
+            json.dumps(
+                experiment,
+                indent=2,
+            )
+            + "\n"
+        )
 
         retained.append(
             str(destination.relative_to(run_dir))
