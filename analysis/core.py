@@ -63,6 +63,7 @@ def storage_identifier(metadata_path: Path) -> str:
 def read_bag(
     bag_path: Path,
     requested_topics: Iterable[str],
+    optional_topics: Iterable[str] = (),
 ) -> BagData:
     """
     Deserialize only the topics needed by the selected experiment profile.
@@ -104,19 +105,29 @@ def read_bag(
         for entry in reader.get_all_topics_and_types()
     }
 
-    requested = set(requested_topics)
-    missing = sorted(requested - topic_types.keys())
+    required = set(requested_topics)
+    optional = set(optional_topics)
+
+    missing = sorted(
+        required - topic_types.keys()
+    )
 
     if missing:
         raise RuntimeError(
             "Bag is missing required topic(s): " + ", ".join(missing)
         )
 
+    selected = required | optional
+    available = selected & topic_types.keys()
+
     message_types = {
         topic: get_message(topic_types[topic])
-        for topic in requested
+        for topic in available
     }
-    samples = {topic: [] for topic in requested}
+    samples = {
+        topic: []
+        for topic in selected
+    }
 
     bag_start_ns: int | None = None
     bag_end_ns: int | None = None
@@ -129,7 +140,7 @@ def read_bag(
 
         bag_end_ns = timestamp_ns
 
-        if topic not in requested:
+        if topic not in available:
             continue
 
         samples[topic].append(

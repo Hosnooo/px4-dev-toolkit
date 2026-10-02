@@ -57,6 +57,15 @@ namespace
 constexpr char kTrajectoryReferenceTopic[] =
   "/px4_toolkit/se3/trajectory_reference";
 
+constexpr char kDirectRateCommandTopic[] =
+  "/px4_toolkit/se3/rate_command";
+
+constexpr char kTorqueRateFeedbackTopic[] =
+  "/px4_toolkit/se3/torque_rate_feedback";
+
+constexpr char kTorqueAngularAccelerationFeedforwardTopic[] =
+  "/px4_toolkit/se3/torque_angular_acceleration_feedforward";
+
 
 double load_vehicle_mass(
   const std::string & config_directory,
@@ -360,6 +369,9 @@ public:
           trajectory_config,
           trajectory_name_));
 
+    normalized_rate_gain_ =
+      normalized_rate_gain;
+
     controller_ =
       std::make_unique<se3::Controller>(
         se3::Parameters{
@@ -404,6 +416,21 @@ public:
     trajectory_reference_pub_ =
       create_publisher<px4_msgs::msg::TrajectorySetpoint>(
         kTrajectoryReferenceTopic,
+        10);
+
+    direct_rate_command_pub_ =
+      create_publisher<px4_msgs::msg::VehicleRatesSetpoint>(
+        kDirectRateCommandTopic,
+        10);
+
+    torque_rate_feedback_pub_ =
+      create_publisher<px4_msgs::msg::VehicleTorqueSetpoint>(
+        kTorqueRateFeedbackTopic,
+        10);
+
+    torque_angular_acceleration_feedforward_pub_ =
+      create_publisher<px4_msgs::msg::VehicleTorqueSetpoint>(
+        kTorqueAngularAccelerationFeedforwardTopic,
         10);
 
     vehicle_command_pub_ =
@@ -608,14 +635,19 @@ private:
       return false;
     }
 
-    if (
-      handoff_ == "acceleration" ||
-      handoff_ == "attitude")
-    {
+    if (handoff_ == "acceleration") {
       return true;
     }
 
-    if (!acceleration_valid_ || !attitude_valid_) {
+    if (!attitude_valid_) {
+      return false;
+    }
+
+    if (handoff_ == "attitude") {
+      return true;
+    }
+
+    if (!acceleration_valid_) {
       return false;
     }
 
@@ -849,11 +881,12 @@ private:
   }
 
 
-  double collective_thrust(
+  double projected_collective_thrust(
     const se3::Vector3 & force) const
   {
-    return px4_wrench::normalized_collective_thrust(
+    return px4_wrench::normalized_projected_collective_thrust(
       force,
+      state_.attitude,
       mass_,
       hover_thrust_);
   }
@@ -886,7 +919,7 @@ private:
     msg.thrust_body = {
       0.0F,
       0.0F,
-      -static_cast<float>(collective_thrust(force)),
+      -static_cast<float>(projected_collective_thrust(force)),
     };
 
     vehicle_attitude_setpoint_pub_->publish(msg);
@@ -912,7 +945,7 @@ private:
     msg.thrust_body = {
       0.0F,
       0.0F,
-      -static_cast<float>(collective_thrust(force)),
+      -static_cast<float>(projected_collective_thrust(force)),
     };
 
     msg.reset_integral = false;
@@ -933,7 +966,7 @@ private:
     thrust.xyz = {
       0.0F,
       0.0F,
-      -static_cast<float>(collective_thrust(force)),
+      -static_cast<float>(projected_collective_thrust(force)),
     };
 
     px4_msgs::msg::VehicleTorqueSetpoint torque{};
@@ -946,6 +979,53 @@ private:
 
     vehicle_thrust_setpoint_pub_->publish(thrust);
     vehicle_torque_setpoint_pub_->publish(torque);
+  }
+
+
+  void publish_direct_torque_diagnostics(
+    const se3::Vector3 & angular_velocity_command,
+    const se3::Vector3 & rate_feedback,
+    const se3::Vector3 & angular_acceleration_feedforward)
+  {
+    const uint64_t timestamp =
+      timestamp_us(*this);
+
+    px4_msgs::msg::VehicleRatesSetpoint rate{};
+    rate.timestamp = timestamp;
+    rate.roll =
+      static_cast<float>(
+        angular_velocity_command.x);
+    rate.pitch =
+      static_cast<float>(
+        angular_velocity_command.y);
+    rate.yaw =
+      static_cast<float>(
+        angular_velocity_command.z);
+    rate.reset_integral = false;
+
+    px4_msgs::msg::VehicleTorqueSetpoint feedback{};
+    feedback.timestamp = timestamp;
+    feedback.xyz = {
+      static_cast<float>(rate_feedback.x),
+      static_cast<float>(rate_feedback.y),
+      static_cast<float>(rate_feedback.z),
+    };
+
+    px4_msgs::msg::VehicleTorqueSetpoint feedforward{};
+    feedforward.timestamp = timestamp;
+    feedforward.xyz = {
+      static_cast<float>(
+        angular_acceleration_feedforward.x),
+      static_cast<float>(
+        angular_acceleration_feedforward.y),
+      static_cast<float>(
+        angular_acceleration_feedforward.z),
+    };
+
+    direct_rate_command_pub_->publish(rate);
+    torque_rate_feedback_pub_->publish(feedback);
+    torque_angular_acceleration_feedforward_pub_->publish(
+      feedforward);
   }
 
 
@@ -1098,12 +1178,44 @@ private:
         reference.yaw_rate,
         reference.yaw_acceleration);
 
-    publish_thrust_and_torque_setpoint(
-      output.force_vector,
+    const se3::DesiredAttitudeRate desired_rate{
+      desired.attitude,
+      desired.angular_velocity,
+    };
+
+    const se3::Vector3 angular_velocity_command =
+      controller_->compute_attitude_rate_command(
+        state_.attitude,
+        desired_rate);
+
+    const se3::Vector3 rate_error =
+      angular_velocity_command -
+      state_.angular_velocity;
+
+    const se3::Vector3 rate_feedback =
+      se3::component_product(
+        normalized_rate_gain_,
+        rate_error);
+
+    const se3::Vector3 normalized_torque =
       controller_->compute_normalized_torque_command(
         state_.attitude,
         state_.angular_velocity,
-        desired));
+        desired);
+
+    const se3::Vector3
+      angular_acceleration_feedforward =
+      normalized_torque -
+      rate_feedback;
+
+    publish_direct_torque_diagnostics(
+      angular_velocity_command,
+      rate_feedback,
+      angular_acceleration_feedforward);
+
+    publish_thrust_and_torque_setpoint(
+      output.force_vector,
+      normalized_torque);
   }
 
 
@@ -1223,6 +1335,8 @@ private:
   double hover_thrust_{
     std::numeric_limits<double>::quiet_NaN()};
 
+  se3::Vector3 normalized_rate_gain_{};
+
   RuntimeTiming runtime_timing_{};
   int valid_setpoint_count_{0};
 
@@ -1259,6 +1373,18 @@ private:
   rclcpp::Publisher<
     px4_msgs::msg::VehicleTorqueSetpoint>::SharedPtr
     vehicle_torque_setpoint_pub_;
+
+  rclcpp::Publisher<
+    px4_msgs::msg::VehicleRatesSetpoint>::SharedPtr
+    direct_rate_command_pub_;
+
+  rclcpp::Publisher<
+    px4_msgs::msg::VehicleTorqueSetpoint>::SharedPtr
+    torque_rate_feedback_pub_;
+
+  rclcpp::Publisher<
+    px4_msgs::msg::VehicleTorqueSetpoint>::SharedPtr
+    torque_angular_acceleration_feedforward_pub_;
 
   rclcpp::Publisher<
     px4_msgs::msg::VehicleCommand>::SharedPtr

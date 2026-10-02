@@ -7,8 +7,9 @@
 namespace offboard_controllers::px4_wrench
 {
 
-double normalized_collective_thrust(
+double normalized_projected_collective_thrust(
   const se3::Vector3 & force,
+  const se3::RotationMatrix & attitude,
   double mass,
   double hover_thrust);
 

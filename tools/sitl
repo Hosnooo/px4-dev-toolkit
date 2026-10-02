@@ -210,7 +210,9 @@ px4_command() {
 }
 
 # MAVProxy runs from its isolated repository-managed Python environment.
-# In headless mode it also loads the repository's software joystick.
+# The repository's software joystick is always loaded because automated
+# takeoff/staging controllers use its local control socket independently of
+# whether Gazebo is running with a GUI.
 mavproxy_command() {
     if [[ ! -x "${MAVPROXY_BIN}" ]]; then
         echo "ERROR: MAVProxy is not installed:" >&2
@@ -218,8 +220,7 @@ mavproxy_command() {
         exit 1
     fi
 
-    if [[ "${HEADLESS}" == "true" ]] &&
-        [[ ! -f "${MAVPROXY_MODULES_DIR}/virtual_joystick.py" ]]; then
+    if [[ ! -f "${MAVPROXY_MODULES_DIR}/virtual_joystick.py" ]]; then
         echo "ERROR: virtual joystick module is missing:" >&2
         echo "  ${MAVPROXY_MODULES_DIR}/virtual_joystick.py" >&2
         exit 1
@@ -236,10 +237,8 @@ mavproxy_command() {
     printf -v argument ' %q' "--master=${MAVPROXY_MASTER}"
     command+="${argument}"
 
-    if [[ "${HEADLESS}" == "true" ]]; then
-        printf -v argument ' %q' '--cmd=module load virtual_joystick'
-        command+="${argument}"
-    fi
+    printf -v argument ' %q' '--cmd=module load virtual_joystick'
+    command+="${argument}"
 
     printf 'bash -lc %q' "${command}"
 }

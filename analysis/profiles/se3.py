@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from analysis.comparison import tracking_error_series
 from analysis.core import (
     BagData,
     TimedSample,
@@ -64,12 +65,30 @@ TRAJECTORY_REFERENCE_TOPIC = (
     "/px4_toolkit/se3/trajectory_reference"
 )
 
+DIRECT_RATE_COMMAND_TOPIC = (
+    "/px4_toolkit/se3/rate_command"
+)
+
+TORQUE_RATE_FEEDBACK_TOPIC = (
+    "/px4_toolkit/se3/torque_rate_feedback"
+)
+
+TORQUE_ANGULAR_ACCELERATION_FEEDFORWARD_TOPIC = (
+    "/px4_toolkit/se3/torque_angular_acceleration_feedforward"
+)
+
 REQUIRED_TOPICS = {
     STATUS_TOPIC,
     OFFBOARD_MODE_TOPIC,
     *HANDOFF_TOPICS,
     TRAJECTORY_REFERENCE_TOPIC,
     *CONTROL_PIPELINE_TOPICS,
+}
+
+OPTIONAL_TOPICS = {
+    DIRECT_RATE_COMMAND_TOPIC,
+    TORQUE_RATE_FEEDBACK_TOPIC,
+    TORQUE_ANGULAR_ACCELERATION_FEEDFORWARD_TOPIC,
 }
 
 
@@ -240,6 +259,45 @@ def extract_se3_layers(
         "reference": reference,
         "handoff": handoff,
     }
+
+
+def extract_direct_torque_diagnostics(
+    bag: BagData,
+) -> dict[str, object]:
+    """Extract optional toolkit-owned direct-wrench diagnostics."""
+    diagnostics = {}
+
+    if bag.samples.get(DIRECT_RATE_COMMAND_TOPIC):
+        diagnostics["rate_command"] = _series3(
+            bag,
+            DIRECT_RATE_COMMAND_TOPIC,
+            lambda msg: (
+                msg.roll,
+                msg.pitch,
+                msg.yaw,
+            ),
+            scale=180.0 / 3.14159265358979323846,
+        )
+
+    if bag.samples.get(TORQUE_RATE_FEEDBACK_TOPIC):
+        diagnostics["rate_feedback"] = _series3(
+            bag,
+            TORQUE_RATE_FEEDBACK_TOPIC,
+            lambda msg: msg.xyz,
+        )
+
+    if bag.samples.get(
+        TORQUE_ANGULAR_ACCELERATION_FEEDFORWARD_TOPIC
+    ):
+        diagnostics[
+            "angular_acceleration_feedforward"
+        ] = _series3(
+            bag,
+            TORQUE_ANGULAR_ACCELERATION_FEEDFORWARD_TOPIC,
+            lambda msg: msg.xyz,
+        )
+
+    return diagnostics
 
 
 def _message_count(series: dict[str, object]) -> int:
@@ -638,6 +696,12 @@ def analyze(bag: BagData) -> AnalysisResult:
         tracking_bag
     )
 
+    torque_diagnostics = (
+        extract_direct_torque_diagnostics(
+            tracking_bag
+        )
+    )
+
     lines = [
         f"Profile: {PROFILE_NAME}",
         f"Bag: {bag.path}",
@@ -722,6 +786,7 @@ def analyze(bag: BagData) -> AnalysisResult:
         plot_data={
             "layers": layers,
             "pipeline": pipeline,
+            "torque_diagnostics": torque_diagnostics,
             "handoff_mode": handoff_mode,
             "markers": markers,
             "state_names": state_names,
@@ -861,5 +926,123 @@ def write_plots(
 
     if mode_path not in generated:
         generated.append(mode_path)
+
+    diagnostics = result.plot_data.get(
+        "torque_diagnostics",
+        {},
+    )
+
+    rate_command = diagnostics.get(
+        "rate_command"
+    )
+
+    if rate_command:
+        rate_path = (
+            output_dir
+            / "10_direct_rate_tracking.png"
+        )
+
+        save_tracking_plot(
+            rate_path,
+            components=_vector_components(
+                {
+                    "command": rate_command,
+                    "actual":
+                        pipeline["rates"]["actual"],
+                },
+                [
+                    ("p / roll", "x"),
+                    ("q / pitch", "y"),
+                    ("r / yaw", "z"),
+                ],
+            ),
+            title=(
+                "Direct Wrench Rate Command "
+                "vs Measured Body Rate"
+            ),
+            unit="[deg/s]",
+            markers=markers,
+        )
+
+        generated.append(rate_path)
+
+        rate_error = tracking_error_series(
+            pipeline["rates"]["actual"],
+            rate_command,
+            time_origin_s=0.0,
+        )
+
+        error_path = (
+            output_dir
+            / "11_direct_rate_error.png"
+        )
+
+        save_tracking_plot(
+            error_path,
+            components=_vector_components(
+                {
+                    "actual - command":
+                        rate_error,
+                },
+                [
+                    ("p / roll", "x"),
+                    ("q / pitch", "y"),
+                    ("r / yaw", "z"),
+                ],
+            ),
+            title=(
+                "Direct Wrench Body-Rate Error"
+            ),
+            unit="[deg/s]",
+            markers=markers,
+        )
+
+        generated.append(error_path)
+
+    rate_feedback = diagnostics.get(
+        "rate_feedback"
+    )
+    angular_acceleration_feedforward = (
+        diagnostics.get(
+            "angular_acceleration_feedforward"
+        )
+    )
+
+    if (
+        rate_feedback
+        and angular_acceleration_feedforward
+        and "torque" in layers["handoff"]
+    ):
+        torque_path = (
+            output_dir
+            / "12_direct_torque_decomposition.png"
+        )
+
+        save_tracking_plot(
+            torque_path,
+            components=_vector_components(
+                {
+                    "rate feedback":
+                        rate_feedback,
+                    "angular-acceleration feed-forward":
+                        angular_acceleration_feedforward,
+                    "final direct command":
+                        layers["handoff"]["torque"],
+                },
+                [
+                    ("roll / x", "x"),
+                    ("pitch / y", "y"),
+                    ("yaw / z", "z"),
+                ],
+            ),
+            title=(
+                "Direct Wrench Normalized "
+                "Torque Decomposition"
+            ),
+            unit="[normalized]",
+            markers=markers,
+        )
+
+        generated.append(torque_path)
 
     return generated

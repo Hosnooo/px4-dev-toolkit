@@ -28,9 +28,18 @@ void expect_near(
 }
 
 
-void test_hover_force_maps_to_hover_thrust()
+
+
+
+
+
+
+
+void test_projected_thrust_matches_hover_when_aligned()
 {
-  using offboard_controllers::px4_wrench::normalized_collective_thrust;
+  using offboard_controllers::px4_wrench::
+    normalized_projected_collective_thrust;
+  using offboard_controllers::se3::RotationMatrix;
   using offboard_controllers::se3::Vector3;
 
   constexpr double mass = 2.0;
@@ -42,44 +51,96 @@ void test_hover_force_maps_to_hover_thrust()
     -mass * kGravity,
   };
 
+  const RotationMatrix attitude{
+    {1.0, 0.0, 0.0},
+    {0.0, 1.0, 0.0},
+    {0.0, 0.0, 1.0},
+  };
+
   expect_near(
-    "hover collective thrust",
-    normalized_collective_thrust(
+    "aligned projected thrust",
+    normalized_projected_collective_thrust(
       force,
+      attitude,
       mass,
       hover_thrust),
     hover_thrust);
 }
 
 
-void test_mapping_uses_force_magnitude()
+void test_projected_thrust_uses_current_body_z()
 {
-  using offboard_controllers::px4_wrench::normalized_collective_thrust;
+  using offboard_controllers::px4_wrench::
+    normalized_projected_collective_thrust;
+  using offboard_controllers::se3::RotationMatrix;
   using offboard_controllers::se3::Vector3;
 
   constexpr double mass = 2.0;
   constexpr double hover_thrust = 0.60;
-  constexpr double weight = mass * kGravity;
+  const double sin_60 = std::sqrt(3.0) / 2.0;
 
   const Vector3 force{
-    0.6 * weight,
     0.0,
-    -0.8 * weight,
+    0.0,
+    -mass * kGravity,
+  };
+
+  // Current body z is tilted 60 degrees from the desired thrust axis.
+  const RotationMatrix attitude{
+    {0.5, 0.0, -sin_60},
+    {0.0, 1.0, 0.0},
+    {sin_60, 0.0, 0.5},
   };
 
   expect_near(
-    "tilted collective thrust",
-    normalized_collective_thrust(
+    "tilted projected thrust",
+    normalized_projected_collective_thrust(
       force,
+      attitude,
       mass,
       hover_thrust),
-    hover_thrust);
+    0.5 * hover_thrust);
 }
 
 
-void test_mapping_does_not_hide_saturation()
+void test_projected_thrust_clamps_negative_projection()
 {
-  using offboard_controllers::px4_wrench::normalized_collective_thrust;
+  using offboard_controllers::px4_wrench::
+    normalized_projected_collective_thrust;
+  using offboard_controllers::se3::RotationMatrix;
+  using offboard_controllers::se3::Vector3;
+
+  constexpr double mass = 2.0;
+  constexpr double hover_thrust = 0.60;
+
+  const Vector3 force{
+    0.0,
+    0.0,
+    -mass * kGravity,
+  };
+
+  const RotationMatrix attitude{
+    {1.0, 0.0, 0.0},
+    {0.0, -1.0, 0.0},
+    {0.0, 0.0, -1.0},
+  };
+
+  expect_near(
+    "negative projected thrust",
+    normalized_projected_collective_thrust(
+      force,
+      attitude,
+      mass,
+      hover_thrust),
+    0.0);
+}
+
+
+void test_projected_thrust_clamps_upper_limit()
+{
+  using offboard_controllers::px4_wrench::
+    normalized_projected_collective_thrust;
+  using offboard_controllers::se3::RotationMatrix;
   using offboard_controllers::se3::Vector3;
 
   constexpr double mass = 2.0;
@@ -91,13 +152,20 @@ void test_mapping_does_not_hide_saturation()
     -2.0 * mass * kGravity,
   };
 
+  const RotationMatrix attitude{
+    {1.0, 0.0, 0.0},
+    {0.0, 1.0, 0.0},
+    {0.0, 0.0, 1.0},
+  };
+
   expect_near(
-    "double-weight collective thrust",
-    normalized_collective_thrust(
+    "upper projected thrust",
+    normalized_projected_collective_thrust(
       force,
+      attitude,
       mass,
       hover_thrust),
-    1.20);
+    1.0);
 }
 
 
@@ -180,9 +248,10 @@ void test_px4_quaternion_maps_to_body_to_ned_rotation()
 
 int main()
 {
-  test_hover_force_maps_to_hover_thrust();
-  test_mapping_uses_force_magnitude();
-  test_mapping_does_not_hide_saturation();
+  test_projected_thrust_matches_hover_when_aligned();
+  test_projected_thrust_uses_current_body_z();
+  test_projected_thrust_clamps_negative_projection();
+  test_projected_thrust_clamps_upper_limit();
   test_identity_rotation_maps_to_identity_quaternion();
   test_yaw_90_rotation_maps_to_px4_quaternion();
   test_px4_quaternion_maps_to_body_to_ned_rotation();

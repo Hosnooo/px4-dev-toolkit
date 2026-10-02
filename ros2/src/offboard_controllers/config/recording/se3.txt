@@ -31,3 +31,8 @@ OUT_ACTUATOR_MOTORS
 
 # Toolkit-generated trajectory reference
 /px4_toolkit/se3/trajectory_reference
+
+# Toolkit direct-wrench diagnostics
+/px4_toolkit/se3/rate_command
+/px4_toolkit/se3/torque_rate_feedback
+/px4_toolkit/se3/torque_angular_acceleration_feedforward

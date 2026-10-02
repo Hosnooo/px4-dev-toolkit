@@ -388,7 +388,7 @@ void test_configuration()
 
   require_near(
     figure_eight.sequence.duration_s(),
-    24.0,
+    64.0,
     "figure-eight configured duration");
 
   const auto primitive =
@@ -415,7 +415,7 @@ void test_full_excitation_configuration()
 
   require_near(
     configured.sequence.duration_s(),
-    54.0,
+    94.0,
     "full excitation duration");
 
   const auto origin =
@@ -425,7 +425,7 @@ void test_full_excitation_configuration()
 
   const auto final =
     configured.sequence.sample(
-      60.0,
+      configured.sequence.duration_s(),
       origin);
 
   require_vector(

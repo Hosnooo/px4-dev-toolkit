@@ -1,0 +1,280 @@
+#!/usr/bin/python3 -s
+
+"""Compare two or more recorded SE3 experiment bags."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import sys
+
+
+def find_repo_root() -> Path:
+    """Locate px4_env from this executable."""
+    start = Path(__file__).resolve()
+
+    for path in (
+        start.parent,
+        *start.parents,
+    ):
+        if (
+            (path / "px4_env.repos").is_file()
+            and (path / "analysis").is_dir()
+            and (path / "ros2").is_dir()
+        ):
+            return path
+
+    raise RuntimeError(
+        "Could not locate px4_env repository root "
+        f"from {start}"
+    )
+
+
+ROOT = find_repo_root()
+sys.path.insert(
+    0,
+    str(ROOT),
+)
+
+from analysis.comparison import (  # noqa: E402
+    unique_labels,
+    validate_profile_names,
+)
+from analysis.core import read_bag  # noqa: E402
+from analysis.profiles import (  # noqa: E402
+    detect_profile_name,
+    get_profile,
+)
+from analysis.profiles.se3_comparison import (  # noqa: E402
+    build_run,
+    comparison_summary,
+    trajectory_segments,
+    write_comparison_plots,
+)
+
+
+def default_study_output(
+    bag_paths: list[Path],
+) -> Path:
+    """Use <study>/comparison when all bags belong to one sequence study."""
+    parents = {
+        path.parent.resolve()
+        for path in bag_paths
+    }
+
+    if len(parents) != 1:
+        raise ValueError(
+            "Bags do not share one study bag directory; "
+            "provide --output."
+        )
+
+    bag_root = next(
+        iter(parents)
+    )
+
+    if bag_root.name != "bags":
+        raise ValueError(
+            "Comparison output cannot be inferred for "
+            "standalone bags; provide --output."
+        )
+
+    study_dir = bag_root.parent
+
+    if not (
+        study_dir / "manifest.json"
+    ).is_file():
+        raise ValueError(
+            "Shared bag directory is not a sequence study; "
+            "provide --output."
+        )
+
+    return (
+        study_dir / "comparison"
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Compare two or more PX4 experiment bags."
+        )
+    )
+    parser.add_argument(
+        "bags",
+        nargs="+",
+        type=Path,
+        help=(
+            "ROS 2 bag directories to compare."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help=(
+            "Output directory. Sequence-study bags "
+            "default to <study>/comparison."
+        ),
+    )
+    parser.add_argument(
+        "--trajectory",
+        help=(
+            "Optional SE3 trajectory name for "
+            "segment-aware metrics."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    bag_paths = [
+        path.expanduser().resolve()
+        for path in args.bags
+    ]
+
+    if len(bag_paths) < 2:
+        raise ValueError(
+            "Comparison requires at least two bags."
+        )
+
+    for path in bag_paths:
+        if not path.is_dir():
+            raise RuntimeError(
+                "Bag directory does not exist: "
+                f"{path}"
+            )
+
+    profile_names = [
+        detect_profile_name(path)
+        for path in bag_paths
+    ]
+    profile_name = (
+        validate_profile_names(
+            profile_names
+        )
+    )
+
+    if profile_name != "se3":
+        raise ValueError(
+            "px4_compare currently supports the "
+            f"se3 profile only; got {profile_name}"
+        )
+
+    profile = get_profile(
+        profile_name
+    )
+    analyzed = []
+
+    for path in bag_paths:
+        bag = read_bag(
+            path,
+            profile.REQUIRED_TOPICS,
+            getattr(
+                profile,
+                "OPTIONAL_TOPICS",
+                (),
+            ),
+        )
+        analyzed.append(
+            profile.analyze(bag)
+        )
+
+    base_labels = [
+        str(
+            result.metrics["handoff"]
+        )
+        for result in analyzed
+    ]
+    labels = unique_labels(
+        base_labels,
+        bag_paths,
+    )
+
+    runs = [
+        build_run(
+            result,
+            path,
+            label,
+        )
+        for result, path, label
+        in zip(
+            analyzed,
+            bag_paths,
+            labels,
+        )
+    ]
+
+    segments = None
+
+    if args.trajectory:
+        config_path = (
+            ROOT
+            / "ros2"
+            / "src"
+            / "offboard_controllers"
+            / "config"
+            / "trajectories.yaml"
+        )
+        segments = trajectory_segments(
+            config_path,
+            args.trajectory,
+        )
+
+    if args.output is None:
+        output_dir = (
+            default_study_output(
+                bag_paths
+            )
+        )
+    else:
+        output_dir = (
+            args.output
+            .expanduser()
+            .resolve()
+        )
+
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    summary = comparison_summary(
+        runs,
+        segments,
+    )
+
+    summary_path = (
+        output_dir / "summary.txt"
+    )
+    summary_path.write_text(
+        summary
+    )
+
+    print(
+        summary,
+        end="",
+    )
+    print(
+        f"Summary: {summary_path}"
+    )
+
+    for path in write_comparison_plots(
+        runs,
+        output_dir,
+        segments,
+    ):
+        print(f"Plot: {path}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (
+        RuntimeError,
+        ValueError,
+    ) as exc:
+        print(
+            f"ERROR: {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)

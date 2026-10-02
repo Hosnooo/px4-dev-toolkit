@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <stdexcept>
@@ -8,21 +9,33 @@
 namespace offboard_controllers::px4_wrench
 {
 
-double normalized_collective_thrust(
+double normalized_projected_collective_thrust(
   const se3::Vector3 & force,
+  const se3::RotationMatrix & attitude,
   double mass,
   double hover_thrust)
 {
-  const double force_magnitude =
-    std::sqrt(
-      force.x * force.x +
-      force.y * force.y +
-      force.z * force.z);
+  // Lee SE(3) collective thrust before actuator limits:
+  //   f = -A . R e3
+  // RotationMatrix::b3 is the current body z-axis R e3 in NED.
+  const double physical_thrust =
+    -(
+      force.x * attitude.b3.x +
+      force.y * attitude.b3.y +
+      force.z * attitude.b3.z);
 
-  return
+  const double normalized_thrust =
     hover_thrust *
-    force_magnitude /
+    physical_thrust /
     (mass * se3::kStandardGravity);
+
+  // PX4 VehicleThrustSetpoint is a normalized body-axis thrust setpoint.
+  // Limit the multicopter collective magnitude here; the publisher applies
+  // the negative FRD body-z sign.
+  return std::clamp(
+    normalized_thrust,
+    0.0,
+    1.0);
 }
 
 

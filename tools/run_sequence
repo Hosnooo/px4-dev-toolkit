@@ -202,16 +202,80 @@ def write_manifest(path: Path, manifest: dict[str, object]) -> None:
 
 
 def bag_directories(root: Path) -> set[Path]:
-    """Return rosbag directories currently present below the toolkit bag root."""
+    """Return recorded bag directories outside sequence study views."""
     bag_root = root / "bags"
 
     if not bag_root.is_dir():
         return set()
 
-    return {
-        metadata.parent.resolve()
-        for metadata in bag_root.rglob("metadata.yaml")
-    }
+    bags = set()
+
+    for metadata in bag_root.rglob("metadata.yaml"):
+        relative = metadata.relative_to(bag_root)
+
+        if relative.parts and relative.parts[0] == "sequences":
+            continue
+
+        bags.add(metadata.parent.resolve())
+
+    return bags
+
+
+def retain_recorded_bags(
+    run_dir: Path,
+    index: int,
+    step_name: str,
+    bags: list[Path],
+) -> list[str]:
+    """Move bags produced by one step into the sequence study."""
+    if not bags:
+        return []
+
+    study_bag_dir = run_dir / "bags"
+    study_bag_dir.mkdir(exist_ok=True)
+
+    retained = []
+
+    for bag_index, bag in enumerate(bags, start=1):
+        if len(bags) == 1:
+            bag_name = f"{index:02d}-{step_name}"
+        else:
+            bag_name = (
+                f"{index:02d}-{step_name}-{bag_index:02d}"
+            )
+
+        destination = study_bag_dir / bag_name
+        profile_name = bag.parent.name
+
+        shutil.move(
+            str(bag),
+            str(destination),
+        )
+
+        # Recording first creates bags/<profile>/<timestamp>. After moving the
+        # recorded bag into its sequence study, remove the now-empty profile
+        # directory so sequential experiments leave no empty bag roots behind.
+        try:
+            bag.parent.rmdir()
+        except OSError:
+            pass
+
+        profile_path = destination / "experiment.json"
+
+        if not profile_path.exists():
+            profile_path.write_text(
+                json.dumps(
+                    {"profile": profile_name},
+                    indent=2,
+                )
+                + "\n"
+            )
+
+        retained.append(
+            str(destination.relative_to(run_dir))
+        )
+
+    return retained
 
 
 def run_step(
@@ -282,6 +346,9 @@ def main() -> int:
 
     run_dir.mkdir(parents=True, exist_ok=False)
 
+    logs_dir = run_dir / "logs"
+    logs_dir.mkdir()
+
     manifest_path = run_dir / "manifest.json"
 
     manifest = {
@@ -304,7 +371,7 @@ def main() -> int:
             command = command_for_step(step)
 
             log_path = (
-                run_dir
+                logs_dir
                 / f"{index:02d}-{step['name']}.log"
             )
 
@@ -312,7 +379,7 @@ def main() -> int:
                 "index": index,
                 "name": step["name"],
                 "command": command,
-                "log": log_path.name,
+                "log": str(log_path.relative_to(run_dir)),
                 "started_at": utc_now(),
                 "finished_at": None,
                 "exit_code": None,
@@ -337,11 +404,17 @@ def main() -> int:
 
             bags_after = bag_directories(root)
 
+            recorded_bags = sorted(
+                bags_after - bags_before
+            )
+
             record["finished_at"] = utc_now()
             record["exit_code"] = exit_code
-            record["recorded_bags"] = sorted(
-                str(path.relative_to(root))
-                for path in bags_after - bags_before
+            record["recorded_bags"] = retain_recorded_bags(
+                run_dir,
+                index,
+                str(step["name"]),
+                recorded_bags,
             )
 
             write_manifest(manifest_path, manifest)
@@ -366,7 +439,7 @@ def main() -> int:
 
                 if settle_seconds > 0.0:
                     print(
-                        f"Settling in Position mode for "
+                        f"Settling for "
                         f"{settle_seconds:.1f} s..."
                     )
                     time.sleep(settle_seconds)
