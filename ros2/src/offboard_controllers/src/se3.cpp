@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -16,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include <px4_msgs/msg/control_allocator_status.hpp>
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_angular_velocity.hpp>
@@ -23,6 +25,8 @@
 #include <px4_msgs/msg/vehicle_attitude_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
 #include <px4_msgs/msg/vehicle_command_ack.hpp>
+#include <px4_msgs/msg/vehicle_control_mode.hpp>
+#include <px4_msgs/msg/vehicle_land_detected.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <px4_msgs/msg/vehicle_rates_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_status.hpp>
@@ -32,6 +36,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <offboard_controllers/offboard_lifecycle.hpp>
+#include <offboard_controllers/px4_rate.hpp>
 #include <offboard_controllers/px4_wrench.hpp>
 #include <offboard_controllers/runtime_timing.hpp>
 #include <offboard_controllers/se3/controller.hpp>
@@ -292,6 +297,58 @@ public:
           std::vector<double>{}),
         "normalized_angular_acceleration_gain");
 
+    const se3::Vector3 px4_rate_p =
+      vector3_parameter(
+        declare_parameter<std::vector<double>>(
+          "px4_rate_p",
+          std::vector<double>{}),
+        "px4_rate_p");
+
+    const se3::Vector3 px4_rate_i =
+      vector3_parameter(
+        declare_parameter<std::vector<double>>(
+          "px4_rate_i",
+          std::vector<double>{}),
+        "px4_rate_i");
+
+    const se3::Vector3 px4_rate_d =
+      vector3_parameter(
+        declare_parameter<std::vector<double>>(
+          "px4_rate_d",
+          std::vector<double>{}),
+        "px4_rate_d");
+
+    const se3::Vector3 px4_rate_ff =
+      vector3_parameter(
+        declare_parameter<std::vector<double>>(
+          "px4_rate_ff",
+          std::vector<double>{}),
+        "px4_rate_ff");
+
+    const se3::Vector3 px4_rate_k =
+      vector3_parameter(
+        declare_parameter<std::vector<double>>(
+          "px4_rate_k",
+          std::vector<double>{}),
+        "px4_rate_k");
+
+    const se3::Vector3 px4_rate_integrator_limit =
+      vector3_parameter(
+        declare_parameter<std::vector<double>>(
+          "px4_rate_integrator_limit",
+          std::vector<double>{}),
+        "px4_rate_integrator_limit");
+
+    const double px4_rate_yaw_torque_cutoff_hz =
+      declare_parameter<double>(
+        "px4_rate_yaw_torque_cutoff_hz",
+        std::numeric_limits<double>::quiet_NaN());
+
+    const bool px4_rate_battery_scale_enabled =
+      declare_parameter<bool>(
+        "px4_rate_battery_scale_enabled",
+        false);
+
     const double control_rate_hz =
       declare_parameter<double>(
         "control_rate_hz",
@@ -348,13 +405,14 @@ public:
 
     if (
       handoff_ == "thrust_and_torque" &&
-      direct_controller_ != "geometric_normalized")
+      direct_controller_ != "geometric_normalized" &&
+      direct_controller_ != "px4_rate")
     {
       throw std::invalid_argument(
               "SE3 direct_controller '" +
               direct_controller_ +
               "' is not implemented. Available direct controllers: "
-              "geometric_normalized.");
+              "geometric_normalized, px4_rate.");
     }
 
     if (
@@ -404,6 +462,30 @@ public:
           normalized_angular_velocity_gain,
           normalized_angular_acceleration_gain,
         });
+
+    if (
+      handoff_ == "thrust_and_torque" &&
+      direct_controller_ == "px4_rate")
+    {
+      if (px4_rate_battery_scale_enabled) {
+        throw std::invalid_argument(
+                "SE3 px4_rate currently requires "
+                "px4_rate_battery_scale_enabled=false; "
+                "the verified PX4 baseline has MC_BAT_SCALE_EN=0.");
+      }
+
+      px4_rate_controller_ =
+        std::make_unique<px4_rate::Controller>(
+          px4_rate::Parameters{
+            px4_rate_p,
+            px4_rate_i,
+            px4_rate_d,
+            px4_rate_ff,
+            px4_rate_k,
+            px4_rate_integrator_limit,
+            px4_rate_yaw_torque_cutoff_hz,
+          });
+    }
 
     offboard_control_mode_pub_ =
       create_publisher<px4_msgs::msg::OffboardControlMode>(
@@ -490,6 +572,36 @@ public:
           update_angular_velocity(*msg);
         });
 
+    control_allocator_status_sub_ =
+      create_subscription<px4_msgs::msg::ControlAllocatorStatus>(
+        px4_topics::OUT_CONTROL_ALLOCATOR_STATUS,
+        rclcpp::SensorDataQoS(),
+        [this](
+          const px4_msgs::msg::ControlAllocatorStatus::SharedPtr msg)
+        {
+          update_control_allocator_status(*msg);
+        });
+
+    vehicle_control_mode_sub_ =
+      create_subscription<px4_msgs::msg::VehicleControlMode>(
+        px4_topics::OUT_VEHICLE_CONTROL_MODE,
+        rclcpp::SensorDataQoS(),
+        [this](
+          const px4_msgs::msg::VehicleControlMode::SharedPtr msg)
+        {
+          update_vehicle_control_mode(*msg);
+        });
+
+    vehicle_land_detected_sub_ =
+      create_subscription<px4_msgs::msg::VehicleLandDetected>(
+        px4_topics::OUT_VEHICLE_LAND_DETECTED,
+        rclcpp::SensorDataQoS(),
+        [this](
+          const px4_msgs::msg::VehicleLandDetected::SharedPtr msg)
+        {
+          update_land_detected(*msg);
+        });
+
     vehicle_status_sub_ =
       create_subscription<px4_msgs::msg::VehicleStatus>(
         px4_topics::OUT_VEHICLE_STATUS_V1,
@@ -544,6 +656,16 @@ private:
   {
     return static_cast<uint64_t>(
       node.get_clock()->now().nanoseconds() / 1000);
+  }
+
+
+  static float finite_or_zero(
+    double value)
+  {
+    return
+      std::isfinite(value) ?
+      static_cast<float>(value) :
+      0.0F;
   }
 
 
@@ -615,13 +737,108 @@ private:
       static_cast<double>(msg.xyz[2]),
     };
 
-    if (!se3::is_finite(angular_velocity)) {
+    const se3::Vector3 angular_acceleration{
+      static_cast<double>(msg.xyz_derivative[0]),
+      static_cast<double>(msg.xyz_derivative[1]),
+      static_cast<double>(msg.xyz_derivative[2]),
+    };
+
+    angular_velocity_received_ = true;
+
+    if (se3::is_finite(angular_velocity)) {
+      state_.angular_velocity =
+        angular_velocity;
+
+      angular_velocity_valid_ = true;
+
+    } else {
       angular_velocity_valid_ = false;
+    }
+
+    if (!px4_rate_controller_) {
       return;
     }
 
-    state_.angular_velocity = angular_velocity;
-    angular_velocity_valid_ = true;
+    const bool rate_stage_active =
+      handoff_ == "thrust_and_torque" &&
+      direct_controller_ == "px4_rate" &&
+      offboard_active_ &&
+      px4_rate_setpoint_valid_ &&
+      controller_state_ready();
+
+    if (!rate_stage_active) {
+      // PX4 advances _last_run on every VehicleAngularVelocity callback,
+      // including callbacks for which rate control is inactive.
+      px4_rate_controller_->observe_timestamp_sample(
+        msg.timestamp_sample);
+
+      return;
+    }
+
+    // MulticopterRateControl resets the integrator before the rate update
+    // whenever the vehicle is disarmed or is not a rotary wing.
+    if (!armed_ || !rotary_wing_) {
+      px4_rate_controller_->reset_integral();
+    }
+
+    const px4_rate::Output output =
+      px4_rate_controller_->update(
+        msg.timestamp_sample,
+        angular_velocity,
+        px4_rate_setpoint_,
+        angular_acceleration,
+        landed_ || maybe_landed_);
+
+    publish_px4_rate_output(
+      msg.timestamp_sample,
+      output);
+  }
+
+
+  void update_control_allocator_status(
+    const px4_msgs::msg::ControlAllocatorStatus & msg)
+  {
+    if (!px4_rate_controller_) {
+      return;
+    }
+
+    std::array<bool, 3> saturation_positive{};
+    std::array<bool, 3> saturation_negative{};
+
+    if (!msg.torque_setpoint_achieved) {
+      constexpr float epsilon =
+        std::numeric_limits<float>::epsilon();
+
+      for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (msg.unallocated_torque[axis] > epsilon) {
+          saturation_positive[axis] = true;
+
+        } else if (msg.unallocated_torque[axis] < -epsilon) {
+          saturation_negative[axis] = true;
+        }
+      }
+    }
+
+    // The latest allocator state remains active until a newer allocator
+    // status arrives, matching the PX4 uORB subscription behavior.
+    px4_rate_controller_->set_saturation_status(
+      saturation_positive,
+      saturation_negative);
+  }
+
+
+  void update_vehicle_control_mode(
+    const px4_msgs::msg::VehicleControlMode & msg)
+  {
+    armed_ = msg.flag_armed;
+  }
+
+
+  void update_land_detected(
+    const px4_msgs::msg::VehicleLandDetected & msg)
+  {
+    landed_ = msg.landed;
+    maybe_landed_ = msg.maybe_landed;
   }
 
 
@@ -641,7 +858,7 @@ private:
 
     // A_dot is obtained from the commanded collective thrust and current
     // attitude, so the attitude and attitude-rate handoffs do not require a
-    // measured acceleration. A_ddot additionally requires current body rate.
+    // measured acceleration.
     if (
       handoff_ == "attitude" ||
       handoff_ == "attitude_rate")
@@ -649,6 +866,16 @@ private:
       return true;
     }
 
+    // px4_rate stops the 100 Hz outer construction at A_dot and runs its
+    // inner rate stage directly from each VehicleAngularVelocity callback.
+    // Require that stream to exist, but do not reject an individual sample
+    // before the reproduced PX4 rate stage sees it.
+    if (direct_controller_ == "px4_rate") {
+      return angular_velocity_received_;
+    }
+
+    // geometric_normalized additionally constructs A_ddot and directly uses
+    // the measured body rate, so it requires a finite current sample.
     return angular_velocity_valid_;
   }
 
@@ -656,6 +883,11 @@ private:
   void update_vehicle_status(
     const px4_msgs::msg::VehicleStatus & msg)
   {
+    rotary_wing_ =
+      msg.vehicle_type ==
+      px4_msgs::msg::VehicleStatus::
+      VEHICLE_TYPE_ROTARY_WING;
+
     position_mode_active_ =
       msg.nav_state ==
       px4_msgs::msg::VehicleStatus::
@@ -685,6 +917,7 @@ private:
 
       offboard_active_ = true;
       return_to_position_requested_ = false;
+      px4_rate_setpoint_valid_ = false;
 
       trajectory_origin_ =
         trajectory::stationary_reference(
@@ -708,6 +941,7 @@ private:
 
     if (transition == OffboardTransition::LOST) {
       offboard_active_ = false;
+      px4_rate_setpoint_valid_ = false;
 
       if (return_to_position_requested_) {
         RCLCPP_INFO(
@@ -974,6 +1208,46 @@ private:
   }
 
 
+  void publish_px4_rate_output(
+    uint64_t timestamp_sample,
+    const px4_rate::Output & output)
+  {
+    const uint64_t timestamp =
+      timestamp_us(*this);
+
+    px4_msgs::msg::VehicleThrustSetpoint thrust{};
+    thrust.timestamp = timestamp;
+    thrust.timestamp_sample = timestamp_sample;
+    thrust.xyz = {
+      0.0F,
+      0.0F,
+      -static_cast<float>(
+        px4_rate_collective_thrust_),
+    };
+
+    px4_msgs::msg::VehicleTorqueSetpoint torque{};
+    torque.timestamp = timestamp;
+    torque.timestamp_sample = timestamp_sample;
+    torque.xyz = {
+      finite_or_zero(
+        output.normalized_torque.x),
+      finite_or_zero(
+        output.normalized_torque.y),
+      finite_or_zero(
+        output.normalized_torque.z),
+    };
+
+    // px4_rate_battery_scale_enabled mirrors the relevant PX4 controller
+    // configuration. The verified baseline has MC_BAT_SCALE_EN=0, so the
+    // pinned wrapper performs no battery scaling or output constraining here.
+    vehicle_thrust_setpoint_pub_->publish(
+      thrust);
+
+    vehicle_torque_setpoint_pub_->publish(
+      torque);
+  }
+
+
   void publish_geometric_normalized_diagnostics(
     const se3::GeometricNormalizedOutput & output)
   {
@@ -1157,6 +1431,38 @@ private:
       return;
     }
 
+    if (direct_controller_ == "px4_rate") {
+      const se3::DesiredAttitudeRate desired =
+        controller_->compute_desired_attitude_rate(
+          output.force_vector,
+          force_derivative,
+          reference.yaw,
+          reference.yaw_rate);
+
+      px4_rate_setpoint_ =
+        controller_->compute_attitude_rate_command(
+          state_.attitude,
+          desired);
+
+      px4_rate_collective_thrust_ =
+        projected_collective_thrust(
+          output.force_vector);
+
+      px4_rate_setpoint_valid_ =
+        se3::is_finite(
+          px4_rate_setpoint_) &&
+        std::isfinite(
+          px4_rate_collective_thrust_);
+
+      if (!px4_rate_setpoint_valid_) {
+        throw std::runtime_error(
+                "SE3 px4_rate outer loop produced a "
+                "non-finite held setpoint.");
+      }
+
+      return;
+    }
+
     const se3::Vector3 force_second_derivative =
       controller_->compute_force_second_derivative(
         state_,
@@ -1200,6 +1506,10 @@ private:
     publish_offboard_control_mode();
 
     if (!controller_state_ready()) {
+      if (px4_rate_controller_) {
+        px4_rate_setpoint_valid_ = false;
+      }
+
       RCLCPP_WARN_THROTTLE(
         get_logger(),
         *get_clock(),
@@ -1283,6 +1593,7 @@ private:
 
 
   std::unique_ptr<se3::Controller> controller_;
+  std::unique_ptr<px4_rate::Controller> px4_rate_controller_;
 
   std::unique_ptr<trajectory::ConfiguredTrajectory>
     configured_trajectory_;
@@ -1294,6 +1605,15 @@ private:
   bool state_valid_{false};
   bool attitude_valid_{false};
   bool angular_velocity_valid_{false};
+  bool angular_velocity_received_{false};
+
+  bool armed_{false};
+  bool rotary_wing_{false};
+  bool landed_{true};
+  bool maybe_landed_{true};
+
+  bool px4_rate_setpoint_valid_{false};
+
   bool offboard_active_{false};
   bool position_mode_active_{false};
   bool return_to_position_requested_{false};
@@ -1303,6 +1623,11 @@ private:
     std::numeric_limits<double>::quiet_NaN()};
 
   double hover_thrust_{
+    std::numeric_limits<double>::quiet_NaN()};
+
+  se3::Vector3 px4_rate_setpoint_{};
+
+  double px4_rate_collective_thrust_{
     std::numeric_limits<double>::quiet_NaN()};
 
   RuntimeTiming runtime_timing_{};
@@ -1370,6 +1695,18 @@ private:
   rclcpp::Subscription<
     px4_msgs::msg::VehicleAngularVelocity>::SharedPtr
     angular_velocity_sub_;
+
+  rclcpp::Subscription<
+    px4_msgs::msg::ControlAllocatorStatus>::SharedPtr
+    control_allocator_status_sub_;
+
+  rclcpp::Subscription<
+    px4_msgs::msg::VehicleControlMode>::SharedPtr
+    vehicle_control_mode_sub_;
+
+  rclcpp::Subscription<
+    px4_msgs::msg::VehicleLandDetected>::SharedPtr
+    vehicle_land_detected_sub_;
 
   rclcpp::Subscription<
     px4_msgs::msg::VehicleStatus>::SharedPtr

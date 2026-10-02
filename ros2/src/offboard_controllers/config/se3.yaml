@@ -7,10 +7,28 @@ se3:
     kv_over_mass: 5.6
 
     # Toolkit cascaded attitude error -> FRD body-rate correction [1/s].
-    # Used by the attitude_rate handoff; it is not part of Lee's direct
-    # physical-moment controller. Initial values follow the pinned PX4
-    # multicopter attitude P scale as a starting numerical scale.
+    # Used by the attitude_rate handoff and by the outer attitude law of
+    # direct_controller=px4_rate. It is not part of Lee's direct physical-
+    # moment controller. The current values match the verified active PX4
+    # MC_ROLL_P, MC_PITCH_P, and MC_YAW_P controller settings.
     attitude_gain: [6.5, 6.5, 2.8]
+
+    # Pinned PX4 multicopter rate-controller configuration.
+    #
+    # Parameter semantics reproduce PX4 at commit:
+    #   f5083ca2c5b919350880e8667e636ef70715db17
+    #
+    # These values were verified from the active PX4 configuration used by
+    # the current baseline experiment. They are controller tuning values,
+    # not physical vehicle properties.
+    px4_rate_p: [0.15, 0.15, 0.20]
+    px4_rate_i: [0.20, 0.20, 0.10]
+    px4_rate_d: [0.003, 0.003, 0.0]
+    px4_rate_ff: [0.0, 0.0, 0.0]
+    px4_rate_k: [1.0, 1.0, 1.0]
+    px4_rate_integrator_limit: [0.30, 0.30, 0.30]
+    px4_rate_yaw_torque_cutoff_hz: 2.0
+    px4_rate_battery_scale_enabled: false
 
     # Toolkit geometric-normalized controller gains. These act directly on
     # e_R, e_Omega, and the transported desired angular acceleration to produce

@@ -101,6 +101,7 @@ ament_target_dependencies(se3
 target_link_libraries(se3
   se3_controller
   trajectory
+  px4_rate
   px4_wrench
   yaml-cpp
 )
