@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+source "${ROOT}/config/env.env"
+
+usage() {
+    echo "Usage:"
+    echo "  ./tools/tmux_log <window> [lines]"
+    echo "  ./tools/tmux_log --list"
+}
+
+list_windows() {
+    tmux list-windows \
+        -t "${TMUX_SESSION}" \
+        -F '  #I: #W'
+}
+
+if ! tmux has-session -t "${TMUX_SESSION}" 2>/dev/null; then
+    echo "ERROR: tmux session '${TMUX_SESSION}' is not running." >&2
+    exit 1
+fi
+
+if [[ "${1:-}" == "--list" ]]; then
+    list_windows
+    exit 0
+fi
+
+if (( $# < 1 || $# > 2 )); then
+    usage
+    exit 2
+fi
+
+window="$1"
+lines="${2:-80}"
+
+if [[ ! "${lines}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: lines must be a positive integer." >&2
+    exit 2
+fi
+
+if ! tmux capture-pane \
+    -pt "${TMUX_SESSION}:${window}" \
+    -S "-${lines}"
+then
+    echo >&2
+    echo "Available windows:" >&2
+    list_windows >&2
+    exit 1
+fi

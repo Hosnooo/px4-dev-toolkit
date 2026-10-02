@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+source "${ROOT}/ros2/runtime_env.sh"
+
+exec /usr/bin/python3 -s "${ROOT}/tools/topic_rates.py" "$@"
