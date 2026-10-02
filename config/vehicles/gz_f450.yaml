@@ -63,11 +63,27 @@ gazebo_propulsion:
       position_m: [-0.1626345596714, -0.1626345596714, 0.0115]
       direction: cw
 
+# PX4/Gazebo output configuration used by this vehicle baseline.
+#
+# SIM_GZ_EC_MIN/MAX come from the pinned F450 airframe. GZMixingInterfaceESC
+# forwards the resulting output values directly as Gazebo rotor-velocity
+# commands. THR_MDL_FAC is a PX4 output-model setting rather than a physical
+# plant property; the F450 airframe does not override it, so the pinned PX4
+# default of 0.0 is active for this baseline.
+px4_gz_esc:
+  min_rot_velocity_rad_s: 150.0
+  max_rot_velocity_rad_s: 1000.0
+  thrust_model_factor: 0.0
+
 px4_allocator:
   frame: FRD
   airframe_type: 0
   rotor_count: 4
   hover_thrust: 0.60
+
+  # CA_ROTOR*_CT is not overridden by the F450 airframe, so the pinned PX4
+  # control_allocator/module.yaml default of 6.5 is active for all four rotors.
+  thrust_coefficient: 6.5
 
   rotors:
     - index: 0

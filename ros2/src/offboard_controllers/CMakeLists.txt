@@ -37,6 +37,10 @@ add_library(px4_rate
   src/px4_rate.cpp
 )
 
+add_library(lee_px4_adapter
+  src/lee_px4_adapter.cpp
+)
+
 add_executable(se3
   src/se3.cpp
 )
@@ -70,6 +74,10 @@ target_include_directories(px4_wrench PUBLIC
 )
 
 target_include_directories(px4_rate PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_include_directories(lee_px4_adapter PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
@@ -184,6 +192,19 @@ if(BUILD_TESTING)
     COMMAND test_px4_rate
   )
 
+  add_executable(test_lee_px4_adapter
+    test/test_lee_px4_adapter.cpp
+  )
+
+  target_link_libraries(test_lee_px4_adapter
+    lee_px4_adapter
+  )
+
+  add_test(
+    NAME lee_px4_adapter
+    COMMAND test_lee_px4_adapter
+  )
+
   add_executable(test_offboard_lifecycle
     test/test_offboard_lifecycle.cpp
   )
@@ -207,7 +228,12 @@ install(
 )
 
 install(
-  TARGETS se3_controller trajectory px4_wrench px4_rate
+  TARGETS
+    se3_controller
+    trajectory
+    px4_wrench
+    px4_rate
+    lee_px4_adapter
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
 )
