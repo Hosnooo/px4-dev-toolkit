@@ -41,6 +41,10 @@ add_library(lee_px4_adapter
   src/lee_px4_adapter.cpp
 )
 
+add_library(vehicle_config
+  src/vehicle_config.cpp
+)
+
 add_executable(se3
   src/se3.cpp
 )
@@ -81,6 +85,15 @@ target_include_directories(lee_px4_adapter PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
+target_include_directories(vehicle_config PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_link_libraries(vehicle_config PUBLIC
+  lee_px4_adapter
+  yaml-cpp
+)
+
 target_link_libraries(trajectory PUBLIC
   yaml-cpp
 )
@@ -111,6 +124,8 @@ target_link_libraries(se3
   trajectory
   px4_rate
   px4_wrench
+  lee_px4_adapter
+  vehicle_config
   yaml-cpp
 )
 
@@ -205,6 +220,23 @@ if(BUILD_TESTING)
     COMMAND test_lee_px4_adapter
   )
 
+  add_executable(test_vehicle_config
+    test/test_vehicle_config.cpp
+  )
+
+  target_link_libraries(test_vehicle_config
+    vehicle_config
+  )
+
+  target_compile_definitions(test_vehicle_config PRIVATE
+    VEHICLE_CONFIG_DIR="${PX4_ENV_ROOT}/config/vehicles"
+  )
+
+  add_test(
+    NAME vehicle_config
+    COMMAND test_vehicle_config
+  )
+
   add_executable(test_offboard_lifecycle
     test/test_offboard_lifecycle.cpp
   )
@@ -234,6 +266,7 @@ install(
     px4_wrench
     px4_rate
     lee_px4_adapter
+    vehicle_config
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
 )

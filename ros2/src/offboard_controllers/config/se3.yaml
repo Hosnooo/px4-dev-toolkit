@@ -30,6 +30,19 @@ se3:
     px4_rate_yaw_torque_cutoff_hz: 2.0
     px4_rate_battery_scale_enabled: false
 
+    # Lee physical rotational gains used only by
+    # direct_controller=lee_physical:
+    #
+    #   M = -K_R e_R - K_Omega e_Omega
+    #       + Omega x J Omega + J alpha_ff
+    #
+    # Units are N m for K_R and N m s for K_Omega. These are controller
+    # tuning values, not vehicle properties. The initial values locally match
+    # the existing geometric-normalized feedback scale around the current
+    # gz_f450 hover operating point through the physical PX4 adapter.
+    lee_k_r: [5.955179, 5.955179, 0.407475]
+    lee_k_omega: [0.916181, 0.916181, 0.145527]
+
     # Toolkit geometric-normalized controller gains. These act directly on
     # e_R, e_Omega, and the transported desired angular acceleration to produce
     # PX4-normalized torque; they are not physical moment gains.

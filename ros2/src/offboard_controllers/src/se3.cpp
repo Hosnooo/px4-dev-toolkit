@@ -35,6 +35,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <yaml-cpp/yaml.h>
 
+#include <offboard_controllers/lee_px4_adapter.hpp>
 #include <offboard_controllers/offboard_lifecycle.hpp>
 #include <offboard_controllers/px4_rate.hpp>
 #include <offboard_controllers/px4_wrench.hpp>
@@ -42,6 +43,7 @@
 #include <offboard_controllers/se3/controller.hpp>
 #include <offboard_controllers/se3/math.hpp>
 #include <offboard_controllers/trajectory.hpp>
+#include <offboard_controllers/vehicle_config.hpp>
 
 namespace px4_topics
 {
@@ -297,6 +299,20 @@ public:
           std::vector<double>{}),
         "normalized_angular_acceleration_gain");
 
+    const se3::Vector3 lee_k_r =
+      vector3_parameter(
+        declare_parameter<std::vector<double>>(
+          "lee_k_r",
+          std::vector<double>{}),
+        "lee_k_r");
+
+    const se3::Vector3 lee_k_omega =
+      vector3_parameter(
+        declare_parameter<std::vector<double>>(
+          "lee_k_omega",
+          std::vector<double>{}),
+        "lee_k_omega");
+
     const se3::Vector3 px4_rate_p =
       vector3_parameter(
         declare_parameter<std::vector<double>>(
@@ -406,13 +422,14 @@ public:
     if (
       handoff_ == "thrust_and_torque" &&
       direct_controller_ != "geometric_normalized" &&
-      direct_controller_ != "px4_rate")
+      direct_controller_ != "px4_rate" &&
+      direct_controller_ != "lee_physical")
     {
       throw std::invalid_argument(
               "SE3 direct_controller '" +
               direct_controller_ +
               "' is not implemented. Available direct controllers: "
-              "geometric_normalized, px4_rate.");
+              "geometric_normalized, px4_rate, lee_physical.");
     }
 
     if (
@@ -431,6 +448,18 @@ public:
               "SE3 kv_over_mass must be finite and positive.");
     }
 
+    if (
+      lee_k_r.x <= 0.0 ||
+      lee_k_r.y <= 0.0 ||
+      lee_k_r.z <= 0.0 ||
+      lee_k_omega.x <= 0.0 ||
+      lee_k_omega.y <= 0.0 ||
+      lee_k_omega.z <= 0.0)
+    {
+      throw std::invalid_argument(
+              "SE3 Lee physical rotational gains must be positive.");
+    }
+
     const double mass =
       load_vehicle_mass(
         vehicle_config_dir,
@@ -438,7 +467,15 @@ public:
 
     mass_ = mass;
 
-    if (handoff_ != "acceleration") {
+    const bool requires_px4_hover_thrust =
+      handoff_ == "attitude" ||
+      handoff_ == "attitude_rate" ||
+      (
+        handoff_ == "thrust_and_torque" &&
+        direct_controller_ != "lee_physical"
+      );
+
+    if (requires_px4_hover_thrust) {
       hover_thrust_ =
         load_vehicle_hover_thrust(
           vehicle_config_dir,
@@ -462,6 +499,22 @@ public:
           normalized_angular_velocity_gain,
           normalized_angular_acceleration_gain,
         });
+
+    if (
+      handoff_ == "thrust_and_torque" &&
+      direct_controller_ == "lee_physical")
+    {
+      lee_physical_configuration_ =
+        vehicle_config::load_lee_physical_configuration(
+          vehicle_config_dir,
+          vehicle_);
+
+      lee_k_r_ =
+        lee_k_r;
+
+      lee_k_omega_ =
+        lee_k_omega;
+    }
 
     if (
       handoff_ == "thrust_and_torque" &&
@@ -1107,6 +1160,21 @@ private:
   }
 
 
+  double physical_collective_thrust(
+    const se3::Vector3 & force) const
+  {
+    // Lee 2010:
+    //
+    //   f = -A . R e3
+    //
+    // RotationMatrix::b3 is R e3 in NED.
+    return
+      -se3::dot(
+        force,
+        state_.attitude.b3);
+  }
+
+
   double projected_collective_thrust(
     const se3::Vector3 & force) const
   {
@@ -1180,10 +1248,18 @@ private:
   }
 
 
-  void publish_thrust_and_torque_setpoint(
-    const se3::Vector3 & force,
+  void publish_normalized_wrench_setpoint(
+    double normalized_thrust_z,
     const se3::Vector3 & normalized_torque)
   {
+    if (
+      !std::isfinite(normalized_thrust_z) ||
+      !se3::is_finite(normalized_torque))
+    {
+      throw std::invalid_argument(
+              "SE3 normalized wrench setpoint must be finite.");
+    }
+
     const uint64_t timestamp =
       timestamp_us(*this);
 
@@ -1192,7 +1268,7 @@ private:
     thrust.xyz = {
       0.0F,
       0.0F,
-      -static_cast<float>(projected_collective_thrust(force)),
+      static_cast<float>(normalized_thrust_z),
     };
 
     px4_msgs::msg::VehicleTorqueSetpoint torque{};
@@ -1205,6 +1281,16 @@ private:
 
     vehicle_thrust_setpoint_pub_->publish(thrust);
     vehicle_torque_setpoint_pub_->publish(torque);
+  }
+
+
+  void publish_thrust_and_torque_setpoint(
+    const se3::Vector3 & force,
+    const se3::Vector3 & normalized_torque)
+  {
+    publish_normalized_wrench_setpoint(
+      -projected_collective_thrust(force),
+      normalized_torque);
   }
 
 
@@ -1479,6 +1565,30 @@ private:
         reference.yaw_rate,
         reference.yaw_acceleration);
 
+    if (direct_controller_ == "lee_physical") {
+      const se3::Vector3 physical_moment =
+        controller_->compute_physical_moment_command(
+          state_.attitude,
+          state_.angular_velocity,
+          desired,
+          lee_physical_configuration_.inertia_frd,
+          lee_k_r_,
+          lee_k_omega_);
+
+      const lee_px4_adapter::Output adapted =
+        lee_px4_adapter::adapt(
+          lee_physical_configuration_.adapter,
+          physical_collective_thrust(
+            output.force_vector),
+          physical_moment);
+
+      publish_normalized_wrench_setpoint(
+        adapted.normalized_thrust_z,
+        adapted.normalized_torque);
+
+      return;
+    }
+
     if (direct_controller_ == "geometric_normalized") {
       const se3::GeometricNormalizedOutput direct_output =
         controller_->compute_geometric_normalized_torque(
@@ -1595,6 +1705,9 @@ private:
   std::unique_ptr<se3::Controller> controller_;
   std::unique_ptr<px4_rate::Controller> px4_rate_controller_;
 
+  vehicle_config::LeePhysicalConfiguration
+    lee_physical_configuration_{};
+
   std::unique_ptr<trajectory::ConfiguredTrajectory>
     configured_trajectory_;
 
@@ -1624,6 +1737,9 @@ private:
 
   double hover_thrust_{
     std::numeric_limits<double>::quiet_NaN()};
+
+  se3::Vector3 lee_k_r_{};
+  se3::Vector3 lee_k_omega_{};
 
   se3::Vector3 px4_rate_setpoint_{};
 
