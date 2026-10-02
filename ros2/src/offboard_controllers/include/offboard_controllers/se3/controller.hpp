@@ -16,13 +16,20 @@ public:
     const State & state,
     const Reference & reference) const;
 
+  // Differentiate Lee's translational control vector A analytically using
+  // the nominal quadrotor dynamics. Estimator acceleration is not required.
   Vector3 compute_force_derivative(
     const State & state,
-    const Reference & reference) const;
+    const Reference & reference,
+    const Vector3 & force) const;
 
+  // Compute A_ddot from rigid-body thrust-axis kinematics. This requires the
+  // current body angular velocity, but never a finite-difference jerk signal.
   Vector3 compute_force_second_derivative(
     const State & state,
-    const Reference & reference) const;
+    const Reference & reference,
+    const Vector3 & force,
+    const Vector3 & force_derivative) const;
 
   RotationMatrix compute_desired_attitude(
     const Vector3 & force,

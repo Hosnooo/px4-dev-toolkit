@@ -4,6 +4,14 @@
  * T. Lee, M. Leok, and N. H. McClamroch,
  * "Geometric Tracking Control of a Quadrotor UAV on SE(3)",
  * 49th IEEE Conference on Decision and Control, 2010.
+ * DOI: 10.1109/CDC.2010.5717652
+ *
+ * The analytical desired-attitude derivative construction follows the open
+ * FDCL reference implementation of the same geometric-control family:
+ *
+ *   fdcl-gwu/uav_geometric_control
+ *   commit f5fcb51c3b962152a4895a9d2e86e4a184655741
+ *   cpp/src/fdcl_control.cpp, control::position_control()
  *
  * Controller mathematics stay independent of ROS 2 and PX4 transport.
  */
@@ -358,27 +366,55 @@ TranslationalOutput Controller::compute_translation(
 
 Vector3 Controller::compute_force_derivative(
   const State & state,
-  const Reference & reference) const
+  const Reference & reference,
+  const Vector3 & force) const
 {
   if (
     !is_finite(state.velocity) ||
-    !is_finite(state.acceleration) ||
+    !is_finite(state.attitude) ||
     !is_finite(reference.velocity) ||
     !is_finite(reference.acceleration) ||
-    !is_finite(reference.jerk))
+    !is_finite(reference.jerk) ||
+    !is_finite(force))
   {
     throw std::invalid_argument(
-            "SE3 force derivative requires finite acceleration and jerk data.");
+            "SE3 force derivative requires finite state, reference, "
+            "and force data.");
   }
 
   const Vector3 velocity_error =
     state.velocity - reference.velocity;
 
-  const Vector3 acceleration_error =
-    state.acceleration - reference.acceleration;
+  // Lee translational control vector in NED:
+  //
+  //   A = -k_x e_x - k_v e_v - m g e3 + m x_ddot_d
+  //
+  // Rather than reading an estimated acceleration and later differentiating
+  // it to obtain jerk, use the nominal quadrotor translational dynamics:
+  //
+  //   f       = -A . b3
+  //   a_model = g e3 - (f / m) b3
+  //
+  // This is the model-based derivative construction used by the FDCL
+  // geometric-controller implementation cited at the top of this file.
+  const double collective_thrust =
+    -dot(force, state.attitude.b3);
 
-  // A = m(xdd_d - g e3) - kx e_x - kv e_v
-  // Adot = m xddd_d - kx e_v - kv(a - xdd_d)
+  const Vector3 gravity{
+    0.0,
+    0.0,
+    kStandardGravity,
+  };
+
+  const Vector3 model_acceleration =
+    gravity -
+    (collective_thrust / parameters_.mass) *
+    state.attitude.b3;
+
+  const Vector3 acceleration_error =
+    model_acceleration - reference.acceleration;
+
+  //   A_dot = m x_d^(3) - k_x e_v - k_v e_a
   return
     parameters_.mass * reference.jerk -
     parameters_.kx * velocity_error -
@@ -388,26 +424,80 @@ Vector3 Controller::compute_force_derivative(
 
 Vector3 Controller::compute_force_second_derivative(
   const State & state,
-  const Reference & reference) const
+  const Reference & reference,
+  const Vector3 & force,
+  const Vector3 & force_derivative) const
 {
   if (
-    !is_finite(state.acceleration) ||
-    !is_finite(state.jerk) ||
+    !is_finite(state.attitude) ||
+    !is_finite(state.angular_velocity) ||
     !is_finite(reference.acceleration) ||
     !is_finite(reference.jerk) ||
-    !is_finite(reference.snap))
+    !is_finite(reference.snap) ||
+    !is_finite(force) ||
+    !is_finite(force_derivative))
   {
     throw std::invalid_argument(
-            "SE3 force second derivative requires finite jerk and snap data.");
+            "SE3 force second derivative requires finite state, reference, "
+            "and force data.");
   }
 
+  const Vector3 body_z_axis =
+    state.attitude.b3;
+
+  const double collective_thrust =
+    -dot(force, body_z_axis);
+
+  const Vector3 gravity{
+    0.0,
+    0.0,
+    kStandardGravity,
+  };
+
+  const Vector3 model_acceleration =
+    gravity -
+    (collective_thrust / parameters_.mass) *
+    body_z_axis;
+
+  // R_dot = R hat(Omega), so
+  //
+  //   b3_dot = R hat(Omega) e3.
+  //
+  // Omega is the measured FRD body angular velocity; b3_dot is therefore
+  // expressed in NED, like A and the translational reference derivatives.
+  const Vector3 body_z_axis_derivative =
+    rotate_body_to_inertial(
+      state.attitude,
+      cross(
+        state.angular_velocity,
+        Vector3{0.0, 0.0, 1.0}));
+
+  // Differentiate f = -A . b3 analytically:
+  //
+  //   f_dot = -A_dot . b3 - A . b3_dot.
+  const double collective_thrust_derivative =
+    -dot(force_derivative, body_z_axis) -
+    dot(force, body_z_axis_derivative);
+
+  // From a_model = g e3 - (f / m)b3:
+  //
+  //   j_model = -(f_dot / m)b3 - (f / m)b3_dot.
+  //
+  // This avoids the noise amplification and delay of finite-differencing an
+  // estimated acceleration signal.
+  const Vector3 model_jerk =
+    -(collective_thrust_derivative / parameters_.mass) *
+    body_z_axis -
+    (collective_thrust / parameters_.mass) *
+    body_z_axis_derivative;
+
   const Vector3 acceleration_error =
-    state.acceleration - reference.acceleration;
+    model_acceleration - reference.acceleration;
 
   const Vector3 jerk_error =
-    state.jerk - reference.jerk;
+    model_jerk - reference.jerk;
 
-  // Addot = m xdddd_d - kx(a - xdd_d) - kv(j - xddd_d)
+  //   A_ddot = m x_d^(4) - k_x e_a - k_v e_j
   return
     parameters_.mass * reference.snap -
     parameters_.kx * acceleration_error -

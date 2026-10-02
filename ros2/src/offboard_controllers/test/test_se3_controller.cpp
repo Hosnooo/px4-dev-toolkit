@@ -142,7 +142,7 @@ void test_tracking_correction()
 }
 
 
-void test_force_derivatives_use_trajectory_jerk_and_snap()
+void test_force_derivative_uses_model_acceleration()
 {
   using namespace offboard_controllers::se3;
 
@@ -150,23 +150,64 @@ void test_force_derivatives_use_trajectory_jerk_and_snap()
 
   State state{};
   state.velocity = {0.5, -1.0, 0.25};
-  state.acceleration = {0.2, -0.4, 0.6};
-  state.jerk = {0.05, -0.1, 0.2};
+  state.attitude = yaw_rotation(0.0);
 
   Reference reference{};
   reference.acceleration = {1.0, 2.0, 3.0};
   reference.jerk = {0.1, 0.2, 0.3};
-  reference.snap = {0.01, 0.02, 0.03};
+
+  // At identity attitude, A = -m g e3 implies f = m g and therefore
+  // a_model = g e3 - (f / m)b3 = 0.
+  const Vector3 force{
+    0.0,
+    0.0,
+    -2.0 * kStandardGravity,
+  };
 
   expect_vector_near(
-    "force derivative",
-    controller.compute_force_derivative(state, reference),
-    {1.0, 22.8, 13.0});
+    "model-based force derivative",
+    controller.compute_force_derivative(
+      state,
+      reference,
+      force),
+    {2.2, 20.4, 16.6});
+}
 
+
+void test_force_second_derivative_uses_rigid_body_kinematics()
+{
+  using namespace offboard_controllers::se3;
+
+  const Controller controller = make_controller();
+
+  State state{};
+  state.attitude = yaw_rotation(0.0);
+  state.angular_velocity = {1.0, 0.0, 0.0};
+
+  Reference reference{};
+
+  const Vector3 force{
+    0.0,
+    0.0,
+    -2.0 * kStandardGravity,
+  };
+
+  const Vector3 force_derivative{
+    0.0,
+    0.0,
+    -2.0,
+  };
+
+  // With Omega = [1, 0, 0], b3_dot = [0, -1, 0]. The non-zero A_dot
+  // additionally gives f_dot = 2 N/s, exercising both analytic jerk terms.
   expect_vector_near(
-    "force second derivative",
-    controller.compute_force_second_derivative(state, reference),
-    {6.72, 21.04, 19.86});
+    "model-based force second derivative",
+    controller.compute_force_second_derivative(
+      state,
+      reference,
+      force,
+      force_derivative),
+    {0.0, -6.0 * kStandardGravity, 6.0});
 }
 
 
@@ -637,7 +678,8 @@ int main()
 {
   test_hover_equilibrium();
   test_tracking_correction();
-  test_force_derivatives_use_trajectory_jerk_and_snap();
+  test_force_derivative_uses_model_acceleration();
+  test_force_second_derivative_uses_rigid_body_kinematics();
   test_translation_allows_zero_force();
   test_hover_attitude_identity();
   test_hover_attitude_yaw_90();

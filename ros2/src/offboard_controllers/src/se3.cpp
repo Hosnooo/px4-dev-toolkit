@@ -550,44 +550,11 @@ private:
       static_cast<double>(msg.vz),
     };
 
+    // Desired-attitude derivatives are model-derived in se3::Controller.
+    // Do not finite-difference VehicleLocalPosition acceleration here: doing
+    // so would inject differentiation noise and estimator delay into
+    // Omega_d_dot.
     state_valid_ = true;
-
-    const se3::Vector3 acceleration{
-      static_cast<double>(msg.ax),
-      static_cast<double>(msg.ay),
-      static_cast<double>(msg.az),
-    };
-
-    if (!se3::is_finite(acceleration)) {
-      acceleration_valid_ = false;
-      jerk_valid_ = false;
-      previous_acceleration_valid_ = false;
-      return;
-    }
-
-    state_.acceleration = acceleration;
-    acceleration_valid_ = true;
-
-    if (
-      previous_acceleration_valid_ &&
-      msg.timestamp_sample > previous_acceleration_timestamp_us_)
-    {
-      const double dt =
-        static_cast<double>(
-          msg.timestamp_sample -
-          previous_acceleration_timestamp_us_) *
-        1.0e-6;
-
-      state_.jerk =
-        (acceleration - previous_acceleration_) / dt;
-
-      jerk_valid_ =
-        se3::is_finite(state_.jerk);
-    }
-
-    previous_acceleration_ = acceleration;
-    previous_acceleration_timestamp_us_ = msg.timestamp_sample;
-    previous_acceleration_valid_ = true;
   }
 
 
@@ -643,21 +610,17 @@ private:
       return false;
     }
 
-    if (handoff_ == "attitude") {
+    // A_dot is obtained from the commanded collective thrust and current
+    // attitude, so the attitude and attitude-rate handoffs do not require a
+    // measured acceleration. A_ddot additionally requires current body rate.
+    if (
+      handoff_ == "attitude" ||
+      handoff_ == "attitude_rate")
+    {
       return true;
     }
 
-    if (!acceleration_valid_) {
-      return false;
-    }
-
-    if (handoff_ == "attitude_rate") {
-      return true;
-    }
-
-    return
-      jerk_valid_ &&
-      angular_velocity_valid_;
+    return angular_velocity_valid_;
   }
 
 
@@ -1146,7 +1109,8 @@ private:
     const se3::Vector3 force_derivative =
       controller_->compute_force_derivative(
         state_,
-        reference);
+        reference,
+        output.force_vector);
 
     if (handoff_ == "attitude_rate") {
       const se3::DesiredAttitudeRate desired =
@@ -1167,7 +1131,9 @@ private:
     const se3::Vector3 force_second_derivative =
       controller_->compute_force_second_derivative(
         state_,
-        reference);
+        reference,
+        output.force_vector,
+        force_derivative);
 
     const se3::DesiredAttitudeDynamics desired =
       controller_->compute_desired_attitude_dynamics(
@@ -1312,22 +1278,16 @@ private:
     configured_trajectory_;
 
   se3::State state_{};
-  se3::Vector3 previous_acceleration_{};
 
   trajectory::Reference trajectory_origin_{};
 
   bool state_valid_{false};
-  bool acceleration_valid_{false};
-  bool jerk_valid_{false};
-  bool previous_acceleration_valid_{false};
   bool attitude_valid_{false};
   bool angular_velocity_valid_{false};
   bool offboard_active_{false};
   bool position_mode_active_{false};
   bool return_to_position_requested_{false};
   rclcpp::Time position_return_last_request_at_{0, 0, RCL_ROS_TIME};
-
-  uint64_t previous_acceleration_timestamp_us_{0};
 
   double mass_{
     std::numeric_limits<double>::quiet_NaN()};

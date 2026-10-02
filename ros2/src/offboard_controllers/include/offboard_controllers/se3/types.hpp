@@ -3,7 +3,8 @@
 namespace offboard_controllers::se3
 {
 
-// SE3 translational quantities use the PX4 local NED frame.
+// Translational vectors use PX4 local NED coordinates unless a field
+// explicitly states otherwise. Rotational body-frame vectors use FRD.
 struct Vector3
 {
   double x{0.0};
@@ -14,7 +15,8 @@ struct Vector3
 
 struct RotationMatrix
 {
-  // Body axes expressed in the NED inertial frame.
+  // Rotation from FRD body coordinates to the NED inertial frame. The
+  // columns are the current body axes expressed in NED.
   Vector3 b1{};
   Vector3 b2{};
   Vector3 b3{};
@@ -23,7 +25,7 @@ struct RotationMatrix
 
 struct InertiaMatrix
 {
-  // Symmetric body-frame inertia tensor [kg m^2].
+  // Symmetric FRD body-frame inertia tensor [kg m^2].
   double xx{0.0};
   double xy{0.0};
   double xz{0.0};
@@ -35,10 +37,14 @@ struct InertiaMatrix
 
 struct State
 {
+  // Position [m] and velocity [m/s] in local NED.
   Vector3 position{};
   Vector3 velocity{};
-  Vector3 acceleration{};
-  Vector3 jerk{};
+
+  // Current FRD-to-NED attitude and measured FRD body angular velocity
+  // [rad/s]. Translational acceleration and jerk are intentionally absent:
+  // desired-attitude derivatives are obtained analytically from the nominal
+  // quadrotor dynamics rather than by differentiating estimator outputs.
   RotationMatrix attitude{};
   Vector3 angular_velocity{};
 };
@@ -46,11 +52,16 @@ struct State
 
 struct Reference
 {
+  // Flat-output translation reference in NED. Jerk and snap are analytic
+  // trajectory derivatives [m/s^3] and [m/s^4], not measured derivatives.
   Vector3 position{};
   Vector3 velocity{};
   Vector3 acceleration{};
   Vector3 jerk{};
   Vector3 snap{};
+
+  // Heading reference and its first two derivatives [rad], [rad/s],
+  // [rad/s^2].
   double yaw{0.0};
   double yaw_rate{0.0};
   double yaw_acceleration{0.0};
@@ -79,11 +90,16 @@ struct Parameters
 
 struct TranslationalOutput
 {
-  // Kinematic acceleration command. Gravity is not included.
+  // Kinematic acceleration command [m/s^2] in NED. Gravity is not included
+  // because the PX4 acceleration handoff expects a kinematic setpoint.
   Vector3 acceleration{};
 
-  // Lee translational force:
-  //   A = m(a_cmd - g e3)
+  // Lee translational control vector A [N] in NED:
+  //
+  //   A = -k_x e_x - k_v e_v - m g e3 + m x_ddot_d
+  //
+  // The desired thrust direction is b3_d = -A / ||A||. This is a physical
+  // force-like control vector, not a PX4-normalized thrust command.
   Vector3 force_vector{};
 };
 
