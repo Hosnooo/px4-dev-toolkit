@@ -14,6 +14,9 @@ PX4_TOPIC(IN_VEHICLE_COMMAND, "/fmu/in/vehicle_command")
 // Final actuator commands produced by PX4 control allocation.
 PX4_TOPIC(OUT_ACTUATOR_MOTORS, "/fmu/out/actuator_motors")
 
+// Control-allocation achievability feedback used by PX4 rate-loop anti-windup.
+PX4_TOPIC(OUT_CONTROL_ALLOCATOR_STATUS, "/fmu/out/control_allocator_status")
+
 // Battery state reported by PX4.
 PX4_TOPIC(OUT_BATTERY_STATUS, "/fmu/out/battery_status")
 
